@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nexus Campus - Confirmación</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <div id="loadingState">
+        <div class="icon loading">⏳</div>
+        <h1>Confirmando...</h1>
+        <p class="subtitle">Un momento por favor</p>
+      </div>
+      <div id="successState" style="display:none;">
+        <div class="icon success">✓</div>
+        <h1>¡Correo verificado!</h1>
+        <p class="subtitle">Tu cuenta fue confirmada correctamente. Ya podés volver a la app e iniciar sesión.</p>
+        <button id="backToAppBtn">Volver a la app</button>
+      </div>
+      <div id="errorState" style="display:none;">
+        <div class="icon error">✕</div>
+        <h1>No se pudo confirmar</h1>
+        <p class="subtitle" id="errorDetail">El enlace es inválido o ya expiró. Probá registrarte de nuevo o pedí un nuevo enlace desde la app.</p>
+      </div>
+    </div>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+  <script>
+    const { url, anonKey, appDeepLink } = window.SUPABASE_CONFIG;
+    const supabaseClient = supabase.createClient(url, anonKey);
+    const loadingState = document.getElementById('loadingState');
+    const successState = document.getElementById('successState');
+    const errorState = document.getElementById('errorState');
+    const errorDetail = document.getElementById('errorDetail');
+
+    function showState(state) {
+      [loadingState, successState, errorState].forEach(el => el.style.display = 'none');
+      state.style.display = 'block';
+    }
+
+    (async () => {
+      const hash = window.location.hash;
+      const queryParams = new URLSearchParams(window.location.search);
+      const code = queryParams.get('code');
+
+      // Caso 1: error explícito en el hash (flujo implícito viejo)
+      if (hash.includes('error')) {
+        const params = new URLSearchParams(hash.substring(1));
+        errorDetail.textContent = params.get('error_description') || errorDetail.textContent;
+        showState(errorState);
+        return;
+      }
+
+      // Caso 2: flujo PKCE -> Supabase manda ?code=xxxx en la query string
+      if (code) {
+        const { error } = await supabaseClient.auth.exchangeCodeForSession(code);
+        if (error) {
+          errorDetail.textContent = error.message;
+          showState(errorState);
+        } else {
+          showState(successState);
+        }
+        return;
+      }
+
+      // Caso 3: ya hay sesión activa (por si el SDK ya la procesó solo)
+      const { data } = await supabaseClient.auth.getSession();
+      if (data.session) {
+        showState(successState);
+        return;
+      }
+
+      // Caso 4: flujo implícito viejo con access_token en el hash
+      if (hash.includes('access_token')) {
+        setTimeout(async () => {
+          const retry = await supabaseClient.auth.getSession();
+          showState(retry.data.session ? successState : errorState);
+        }, 1500);
+        return;
+      }
+
+      showState(errorState);
+    })();
+
+    document.getElementById('backToAppBtn').addEventListener('click', () => {
+      window.location.href = appDeepLink;
+    });
+  </script>
+</body>
+</html>

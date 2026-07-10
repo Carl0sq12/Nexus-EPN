@@ -1,0 +1,6 @@
+{
+  "rewrites": [
+    { "source": "/reset-password", "destination": "/reset-password.html" },
+    { "source": "/auth-callback", "destination": "/auth-callback.html" }
+  ]
+}
