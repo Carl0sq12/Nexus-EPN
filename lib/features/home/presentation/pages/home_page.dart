@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -9,7 +11,10 @@ import 'package:latlong2/latlong.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/constants/app_strings.dart';
 import '../../../../core/constants/app_text_styles.dart';
-import '../../../../core/providers/supabase_provider.dart';
+import '../../../../core/providers/appwrite_provider.dart';
+import '../../../../core/utils/geo_fare.dart';
+import '../../../../core/utils/trip_search.dart';
+import '../../../../core/widgets/badged_icon_button.dart';
 import '../../../map/presentation/providers/map_provider.dart';
 import '../../../profile/presentation/providers/profile_provider.dart';
 import '../../../ratings/presentation/providers/rating_provider.dart';
@@ -52,28 +57,24 @@ class _HomePageState extends ConsumerState<HomePage>
 
   @override
   Widget build(BuildContext context) {
-    final authState = ref.watch(authStateProvider);
-    final userId = authState.value?.session?.user.id;
+    final userId = ref.watch(currentUserIdProvider);
     final locationAsync = ref.watch(currentLocationProvider);
     final tripsAsync = ref.watch(availableTripsProvider);
-    final profileAsync = userId == null
-        ? null
-        : ref.watch(profileProvider(userId));
+    final profileAsync =
+        userId == null ? null : ref.watch(profileProvider(userId));
     final isDriver =
         profileAsync?.maybeWhen(
           data: (profile) => profile.role == AppStrings.roleDriver,
           orElse: () => false,
         ) ??
         false;
-    final requestsAsync = userId == null
-        ? null
-        : ref.watch(myRequestsProvider(userId));
+    final requestsAsync =
+        userId == null ? null : ref.watch(myRequestsProvider(userId));
     final pendingRatingsAsync = !isDriver && userId != null
         ? ref.watch(pendingDriverRatingsProvider(userId))
         : null;
-    final myTripsAsync = isDriver && userId != null
-        ? ref.watch(myTripsProvider(userId))
-        : null;
+    final myTripsAsync =
+        isDriver && userId != null ? ref.watch(myTripsProvider(userId)) : null;
 
     ref.listen(currentLocationProvider, (previous, next) {
       if (next.hasValue) {
@@ -101,13 +102,15 @@ class _HomePageState extends ConsumerState<HomePage>
           }
           await Future<void>.delayed(const Duration(milliseconds: 250));
         },
-        child: CustomScrollView(
+        child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
-          slivers: [
-            SliverToBoxAdapter(child: _HomeHeader(isDriver: isDriver)),
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-              sliver: SliverList.list(
+          padding: EdgeInsets.zero,
+          children: [
+            _HomeHeader(isDriver: isDriver),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   _DashboardSection(
                     tripsAsync: tripsAsync,
@@ -124,10 +127,8 @@ class _HomePageState extends ConsumerState<HomePage>
                     },
                   ),
                   const SizedBox(height: 16),
-                  _QuickActions(isDriver: isDriver),
-                  const SizedBox(height: 16),
-                  if (!isDriver && requestsAsync != null) ...[
-                    _PassengerRequestsSection(requestsAsync: requestsAsync),
+                  if (isDriver) ...[
+                    const _QuickActions(isDriver: true),
                     const SizedBox(height: 16),
                   ],
                   if (!isDriver &&
@@ -140,7 +141,6 @@ class _HomePageState extends ConsumerState<HomePage>
                     const SizedBox(height: 16),
                   ],
                   _AvailableTripsSection(tripsAsync: tripsAsync),
-                  const SizedBox(height: 24),
                 ],
               ),
             ),
@@ -197,13 +197,137 @@ class _HomePageState extends ConsumerState<HomePage>
   }
 }
 
-class _HomeHeader extends StatelessWidget {
+class _HomeHeader extends ConsumerStatefulWidget {
   final bool isDriver;
 
   const _HomeHeader({required this.isDriver});
 
   @override
+  ConsumerState<_HomeHeader> createState() => _HomeHeaderState();
+}
+
+class _HomeHeaderState extends ConsumerState<_HomeHeader> {
+  final _searchController = TextEditingController();
+  final _searchFocus = FocusNode();
+  Timer? _debounce;
+  List<PlaceSuggestion> _placeSuggestions = const [];
+  List<Trip> _tripSuggestions = const [];
+  bool _searching = false;
+  int _searchGeneration = 0;
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _searchController.dispose();
+    _searchFocus.dispose();
+    super.dispose();
+  }
+
+  void _onSearchChanged(String value) {
+    _debounce?.cancel();
+    final generation = ++_searchGeneration;
+    final q = value.trim();
+
+    final allTrips =
+        ref.read(availableTripsProvider).asData?.value ?? const <Trip>[];
+    final tripMatches = q.length < 2
+        ? const <Trip>[]
+        : filterTripsByDestinationQuery(allTrips, q).take(8).toList();
+
+    if (q.length < 2) {
+      setState(() {
+        _tripSuggestions = const [];
+        _placeSuggestions = const [];
+        _searching = false;
+      });
+      return;
+    }
+
+    setState(() {
+      _tripSuggestions = tripMatches;
+      _searching = q.length >= 3;
+    });
+
+    if (q.length < 3) {
+      setState(() {
+        _placeSuggestions = const [];
+        _searching = false;
+      });
+      return;
+    }
+
+    _debounce = Timer(const Duration(milliseconds: 400), () async {
+      try {
+        final results = await GeocodingService.search(q);
+        if (!mounted || generation != _searchGeneration) return;
+        setState(() {
+          _placeSuggestions = results;
+          _searching = false;
+        });
+      } catch (_) {
+        if (!mounted || generation != _searchGeneration) return;
+        setState(() {
+          _placeSuggestions = const [];
+          _searching = false;
+        });
+      }
+    });
+  }
+
+  void _selectTrip(Trip trip) {
+    _debounce?.cancel();
+    _searchGeneration++;
+    _searchFocus.unfocus();
+    setState(() {
+      _searchController.text = trip.destination;
+      _tripSuggestions = const [];
+      _placeSuggestions = const [];
+      _searching = false;
+    });
+    context.push('/trips/${trip.id}');
+  }
+
+  void _selectPlace(PlaceSuggestion place) {
+    _debounce?.cancel();
+    _searchGeneration++;
+    _searchFocus.unfocus();
+    final shortName = place.displayName.split(',').first.trim();
+    final query = shortName.isNotEmpty ? shortName : place.displayName;
+    setState(() {
+      _searchController.text = query;
+      _tripSuggestions = const [];
+      _placeSuggestions = const [];
+      _searching = false;
+    });
+    context.push(
+      '${AppStrings.routeTrips}?q=${Uri.encodeComponent(query)}',
+    );
+  }
+
+  void _submitSearch(String value) {
+    final q = value.trim();
+    if (q.length < 2) return;
+    _searchFocus.unfocus();
+    if (_tripSuggestions.length == 1) {
+      _selectTrip(_tripSuggestions.first);
+      return;
+    }
+    context.push(
+      '${AppStrings.routeTrips}?q=${Uri.encodeComponent(q)}',
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final isDriver = widget.isDriver;
+    final userId = ref.watch(currentUserIdProvider);
+    final requestsBadge = userId == null
+        ? 0
+        : ref.watch(requestsBadgeCountProvider(userId));
+    final notificationsBadge = userId == null
+        ? 0
+        : ref.watch(unreadNotificationsCountProvider(userId));
+
     return Container(
       padding: EdgeInsets.fromLTRB(
         16,
@@ -238,50 +362,206 @@ class _HomeHeader extends StatelessWidget {
                   ],
                 ),
               ),
-              IconButton(
+              BadgedIconButton(
+                tooltip: 'Solicitudes',
+                icon: Icons.send_outlined,
+                count: requestsBadge,
+                onPressed: () => context.push(AppStrings.routeRequests),
+              ),
+              BadgedIconButton(
                 tooltip: 'Notificaciones',
-                icon: const Icon(Icons.notifications_outlined),
-                color: Colors.white,
-                onPressed: () {},
+                icon: Icons.notifications_outlined,
+                count: notificationsBadge,
+                onPressed: () => context.push(AppStrings.routeNotifications),
               ),
             ],
           ),
           const SizedBox(height: 14),
-          Material(
-            color: Colors.white.withValues(alpha: 0.18),
-            borderRadius: BorderRadius.circular(16),
-            child: InkWell(
+          if (isDriver)
+            Material(
+              color: Colors.white.withValues(alpha: 0.18),
               borderRadius: BorderRadius.circular(16),
-              onTap: () => context.push(AppStrings.routeTrips),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 12,
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.search, color: Colors.white, size: 20),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        isDriver
-                            ? 'Revisa tus viajes o publica una ruta'
-                            : AppStrings.searchHint,
-                        style: AppTextStyles.labelMedium.copyWith(
-                          color: Colors.white,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(16),
+                onTap: () => context.push(AppStrings.routeTrips),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 12,
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.search, color: Colors.white, size: 20),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'Revisa tus viajes o publica una ruta',
+                          style: AppTextStyles.labelMedium.copyWith(
+                            color: Colors.white,
+                          ),
                         ),
                       ),
-                    ),
-                    const Icon(
-                      Icons.chevron_right,
-                      color: Colors.white,
-                      size: 20,
-                    ),
-                  ],
+                      const Icon(
+                        Icons.chevron_right,
+                        color: Colors.white,
+                        size: 20,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            )
+          else ...[
+            Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color.fromRGBO(0, 0, 0, 0.12),
+                    blurRadius: 10,
+                    offset: Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: TextField(
+                controller: _searchController,
+                focusNode: _searchFocus,
+                onChanged: _onSearchChanged,
+                textInputAction: TextInputAction.search,
+                onSubmitted: _submitSearch,
+                style: AppTextStyles.bodyMedium,
+                decoration: InputDecoration(
+                  hintText: AppStrings.searchHint,
+                  hintStyle: AppTextStyles.bodyMedium.copyWith(
+                    color: AppColors.textSecondary,
+                  ),
+                  prefixIcon: const Icon(
+                    Icons.search,
+                    color: AppColors.primary,
+                  ),
+                  suffixIcon: _searching
+                      ? const Padding(
+                          padding: EdgeInsets.all(12),
+                          child: SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        )
+                      : (_searchController.text.isNotEmpty
+                          ? IconButton(
+                              icon: const Icon(Icons.clear),
+                              onPressed: () {
+                                _debounce?.cancel();
+                                _searchGeneration++;
+                                setState(() {
+                                  _searchController.clear();
+                                  _tripSuggestions = const [];
+                                  _placeSuggestions = const [];
+                                  _searching = false;
+                                });
+                              },
+                            )
+                          : null),
+                  border: InputBorder.none,
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 14,
+                  ),
                 ),
               ),
             ),
-          ),
+            if (_tripSuggestions.isNotEmpty ||
+                _placeSuggestions.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Container(
+                constraints: const BoxConstraints(maxHeight: 280),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(14),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color.fromRGBO(0, 0, 0, 0.12),
+                      blurRadius: 10,
+                      offset: Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: ListView(
+                  shrinkWrap: true,
+                  padding: EdgeInsets.zero,
+                  children: [
+                    if (_tripSuggestions.isNotEmpty) ...[
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                        child: Text(
+                          'Viajes publicados',
+                          style: AppTextStyles.caption.copyWith(
+                            color: AppColors.primary,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      for (final trip in _tripSuggestions)
+                        ListTile(
+                          dense: true,
+                          leading: const Icon(
+                            Icons.directions_car_outlined,
+                            color: AppColors.primary,
+                          ),
+                          title: Text(
+                            trip.destination,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: AppTextStyles.bodySmall.copyWith(
+                              color: AppColors.onBackground,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          subtitle: Text(
+                            'Desde ${trip.origin} · \$${trip.pricePerSeat.toStringAsFixed(2)}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: AppTextStyles.caption,
+                          ),
+                          onTap: () => _selectTrip(trip),
+                        ),
+                    ],
+                    if (_placeSuggestions.isNotEmpty) ...[
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                        child: Text(
+                          'Lugares',
+                          style: AppTextStyles.caption.copyWith(
+                            color: AppColors.textSecondary,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      for (final place in _placeSuggestions)
+                        ListTile(
+                          dense: true,
+                          leading: const Icon(
+                            Icons.place_outlined,
+                            color: AppColors.primary,
+                          ),
+                          title: Text(
+                            place.displayName,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: AppTextStyles.bodySmall.copyWith(
+                              color: AppColors.onBackground,
+                            ),
+                          ),
+                          onTap: () => _selectPlace(place),
+                        ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ],
         ],
       ),
     );
@@ -393,7 +673,7 @@ class _MetricTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      constraints: const BoxConstraints(minHeight: 92),
+      height: 100,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: AppColors.surface,
@@ -469,10 +749,14 @@ class _MapSection extends StatelessWidget {
                 Expanded(
                   child: Text('Mapa cercano', style: AppTextStyles.titleMedium),
                 ),
-                Text(
-                  'Ubicación actual',
-                  style: AppTextStyles.bodySmall.copyWith(
-                    color: AppColors.textSecondary,
+                InkWell(
+                  onTap: onRetryLocation,
+                  child: Text(
+                    'Ubicación actual',
+                    style: AppTextStyles.bodySmall.copyWith(
+                      color: AppColors.primary,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
               ],
@@ -529,11 +813,17 @@ class _MapPreview extends StatelessWidget {
     return Stack(
       children: [
         FlutterMap(
-          options: MapOptions(initialCenter: center, initialZoom: 15),
+          options: MapOptions(
+            initialCenter: center,
+            initialZoom: 15,
+            interactionOptions: const InteractionOptions(
+              flags: InteractiveFlag.drag | InteractiveFlag.pinchZoom,
+            ),
+          ),
           children: [
             TileLayer(
               urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-              userAgentPackageName: 'com.nexuscampus.app',
+              userAgentPackageName: 'com.epn.nexus_campus',
             ),
             MarkerLayer(
               markers: [
@@ -553,33 +843,34 @@ class _MapPreview extends StatelessWidget {
             ),
           ],
         ),
-        Positioned(
-          left: 12,
-          right: 12,
-          bottom: 12,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
+        if (helperText != null)
+          Positioned(
+            left: 12,
+            right: 12,
+            bottom: 12,
+            child: Material(
               color: AppColors.surface.withValues(alpha: 0.94),
               borderRadius: BorderRadius.circular(14),
-            ),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(12),
-              onTap: onTap,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 2),
-                child: Text(
-                  helperText ?? label,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppTextStyles.bodySmall.copyWith(
-                    color: AppColors.textSecondary,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(12),
+                onTap: onTap,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
+                  child: Text(
+                    helperText!,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTextStyles.bodySmall.copyWith(
+                      color: AppColors.textSecondary,
+                    ),
                   ),
                 ),
               ),
             ),
           ),
-        ),
       ],
     );
   }
@@ -621,41 +912,20 @@ class _QuickActions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final actions = isDriver
-        ? [
-            _ActionItem(
-              icon: Icons.add_road_outlined,
-              label: 'Publicar',
-              onTap: () => context.push(AppStrings.routeTripsNew),
-            ),
-            _ActionItem(
-              icon: Icons.assignment_outlined,
-              label: 'Mis viajes',
-              onTap: () => context.push(AppStrings.routeMyTrips),
-            ),
-            _ActionItem(
-              icon: Icons.map_outlined,
-              label: 'Mapa',
-              onTap: () => context.push(AppStrings.routeMap),
-            ),
-          ]
-        : [
-            _ActionItem(
-              icon: Icons.search,
-              label: 'Buscar',
-              onTap: () => context.push(AppStrings.routeTrips),
-            ),
-            _ActionItem(
-              icon: Icons.send_outlined,
-              label: 'Solicitudes',
-              onTap: () => context.push(AppStrings.routeTrips),
-            ),
-            _ActionItem(
-              icon: Icons.map_outlined,
-              label: 'Mapa',
-              onTap: () => context.push(AppStrings.routeMap),
-            ),
-          ];
+    if (!isDriver) return const SizedBox.shrink();
+
+    final actions = [
+      _ActionItem(
+        icon: Icons.add_road_outlined,
+        label: 'Publicar',
+        onTap: () => context.push(AppStrings.routeTripsNew),
+      ),
+      _ActionItem(
+        icon: Icons.assignment_outlined,
+        label: 'Mis viajes',
+        onTap: () => context.push(AppStrings.routeMyTrips),
+      ),
+    ];
 
     return Row(
       children: [
@@ -704,57 +974,6 @@ class _ActionItem extends StatelessWidget {
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _PassengerRequestsSection extends StatelessWidget {
-  final AsyncValue<List<TripRequest>> requestsAsync;
-
-  const _PassengerRequestsSection({required this.requestsAsync});
-
-  @override
-  Widget build(BuildContext context) {
-    return _SectionContainer(
-      title: 'Mis solicitudes',
-      trailing: TextButton(
-        onPressed: () => context.push(AppStrings.routeTrips),
-        child: const Text('Buscar viajes'),
-      ),
-      child: requestsAsync.when(
-        loading: () => const Padding(
-          padding: EdgeInsets.symmetric(vertical: 24),
-          child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
-        ),
-        error: (_, _) => Padding(
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          child: Text(
-            'No se pudieron cargar tus solicitudes. Desliza para actualizar.',
-            style: AppTextStyles.bodySmall.copyWith(
-              color: AppColors.textSecondary,
-            ),
-          ),
-        ),
-        data: (requests) {
-          if (requests.isEmpty) {
-            return Text(
-              'Cuando solicites un cupo, aparecerá aquí el estado para comprobar si fue enviada, aceptada o rechazada.',
-              style: AppTextStyles.bodySmall.copyWith(
-                color: AppColors.textSecondary,
-              ),
-            );
-          }
-
-          final recent = [...requests]
-            ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-          return Column(
-            children: recent
-                .take(3)
-                .map((request) => _RequestStatusRow(request: request))
-                .toList(),
-          );
-        },
       ),
     );
   }
@@ -888,101 +1107,6 @@ class _PendingDriverRatingRow extends ConsumerWidget {
         ),
       ),
     );
-  }
-}
-
-class _RequestStatusRow extends StatelessWidget {
-  final TripRequest request;
-
-  const _RequestStatusRow({required this.request});
-
-  @override
-  Widget build(BuildContext context) {
-    final status = _statusText(request.status);
-    final color = _statusColor(request.status);
-    final date = DateFormat('dd/MM HH:mm').format(request.createdAt);
-    final shortTripId = request.tripId.substring(
-      0,
-      request.tripId.length < 8 ? request.tripId.length : 8,
-    );
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Row(
-        children: [
-          Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.12),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(_statusIcon(request.status), color: color, size: 18),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Viaje $shortTripId',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppTextStyles.bodyMedium,
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  date,
-                  style: AppTextStyles.bodySmall.copyWith(
-                    color: AppColors.textSecondary,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          _StatusChip(label: status, color: color),
-        ],
-      ),
-    );
-  }
-
-  String _statusText(String status) {
-    switch (status) {
-      case AppStrings.statusAccepted:
-        return 'Aceptada';
-      case AppStrings.statusPriceProposed:
-        return 'Precio propuesto';
-      case AppStrings.statusRejected:
-        return 'Rechazada';
-      default:
-        return 'Pendiente';
-    }
-  }
-
-  IconData _statusIcon(String status) {
-    switch (status) {
-      case AppStrings.statusAccepted:
-        return Icons.check;
-      case AppStrings.statusPriceProposed:
-        return Icons.payments_outlined;
-      case AppStrings.statusRejected:
-        return Icons.close;
-      default:
-        return Icons.schedule;
-    }
-  }
-
-  Color _statusColor(String status) {
-    switch (status) {
-      case AppStrings.statusAccepted:
-        return AppColors.success;
-      case AppStrings.statusPriceProposed:
-        return AppColors.primary;
-      case AppStrings.statusRejected:
-        return AppColors.error;
-      default:
-        return AppColors.warning;
-    }
   }
 }
 
@@ -1125,31 +1249,6 @@ class _SectionContainer extends StatelessWidget {
           const SizedBox(height: 8),
           child,
         ],
-      ),
-    );
-  }
-}
-
-class _StatusChip extends StatelessWidget {
-  final String label;
-  final Color color;
-
-  const _StatusChip({required this.label, required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Text(
-        label,
-        style: AppTextStyles.bodySmall.copyWith(
-          color: color,
-          fontWeight: FontWeight.w600,
-        ),
       ),
     );
   }

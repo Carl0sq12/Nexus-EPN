@@ -287,8 +287,23 @@ CREATE POLICY "emergency_contacts_select" ON public.emergency_contacts
   FOR SELECT USING (auth.uid() = user_id);
 CREATE POLICY "emergency_contacts_insert" ON public.emergency_contacts
   FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "emergency_contacts_update" ON public.emergency_contacts
+  FOR UPDATE USING (auth.uid() = user_id);
 CREATE POLICY "emergency_contacts_delete" ON public.emergency_contacts
   FOR DELETE USING (auth.uid() = user_id);
+
+-- Evita calificaciones duplicadas del mismo rater al mismo usuario en un viaje
+CREATE UNIQUE INDEX IF NOT EXISTS ratings_trip_rater_rated_unique
+  ON public.ratings (trip_id, rater_id, rated_user_id);
+
+-- Buckets de Storage usados por la app (avatars / vehicles).
+-- Ejecutar también en el dashboard si insert no está permitido desde SQL:
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('avatars', 'avatars', true)
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('vehicles', 'vehicles', true)
+ON CONFLICT (id) DO NOTHING;
 
 -- =============================================================
 -- DATOS DE EJEMPLO (opcional)

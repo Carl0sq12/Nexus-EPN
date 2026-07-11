@@ -6,10 +6,12 @@ import 'package:go_router/go_router.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/constants/app_text_styles.dart';
 import '../../../../core/constants/app_strings.dart';
-import '../../../../core/providers/supabase_provider.dart';
+import '../../../../core/providers/appwrite_provider.dart';
 import '../../../../core/widgets/custom_button.dart';
+import '../../../../core/widgets/app_state_views.dart';
 import '../../../../core/widgets/loading_widget.dart';
 import '../../../profile/presentation/providers/profile_provider.dart';
+import '../../domain/entities/vehicle.dart';
 import '../providers/vehicle_provider.dart';
 
 /// Vehicle page showing the driver's registered vehicle or a registration prompt.
@@ -19,10 +21,10 @@ class VehiclePage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final authState = ref.watch(authStateProvider);
-    final userId = authState.value?.session?.user.id;
+    final userId = authState.value?.userId;
 
     if (userId == null) {
-      return const Scaffold(body: SizedBox.shrink());
+      return const Scaffold(body: AppLoadingView());
     }
 
     final profileAsync = ref.watch(profileProvider(userId));
@@ -55,16 +57,73 @@ class VehiclePage extends ConsumerWidget {
     }
 
     final vehicleAsync = ref.watch(myVehicleProvider(userId));
+    final notifierState = ref.watch(vehicleNotifierProvider);
 
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
         title: const Text('Mi vehículo'),
+        flexibleSpace: Container(
+          decoration: const BoxDecoration(gradient: AppColors.primaryGradient),
+        ),
+        foregroundColor: Colors.white,
         actions: [
           if (vehicleAsync.asData?.value != null)
             IconButton(
               icon: const Icon(Icons.edit),
               onPressed: () => context.push(AppStrings.routeVehicleEdit),
+            ),
+          if (vehicleAsync.asData?.value != null)
+            IconButton(
+              icon: const Icon(Icons.delete_outline),
+              onPressed: notifierState.isLoading
+                  ? null
+                  : () async {
+                      final vehicle = vehicleAsync.asData!.value!;
+                      final confirmed = await showDialog<bool>(
+                        context: context,
+                        builder: (dialogContext) => AlertDialog(
+                          title: const Text('Eliminar vehículo'),
+                          content: const Text(
+                            'Se eliminará el vehículo y pasarás a ser pasajero. '
+                            'Para volver a ser conductor deberás registrar un '
+                            'vehículo nuevo (con verificación).',
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () =>
+                                  Navigator.pop(dialogContext, false),
+                              child: const Text('Cancelar'),
+                            ),
+                            TextButton(
+                              onPressed: () =>
+                                  Navigator.pop(dialogContext, true),
+                              child: const Text('Eliminar'),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (confirmed != true) return;
+                      await ref
+                          .read(vehicleNotifierProvider.notifier)
+                          .deleteVehicle(vehicle.id, userId);
+                      final result = ref.read(vehicleNotifierProvider);
+                      if (!context.mounted) return;
+                      if (result.hasError) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text(result.error.toString())),
+                        );
+                        return;
+                      }
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Vehículo eliminado. Ahora eres pasajero.',
+                          ),
+                        ),
+                      );
+                      context.go(AppStrings.routeHome);
+                    },
             ),
         ],
       ),
@@ -148,6 +207,25 @@ class VehiclePage extends ConsumerWidget {
                             ),
                           ),
                         const SizedBox(height: 16),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: _approvalColor(
+                              vehicle.approvalStatus,
+                            ).withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            _approvalLabel(vehicle.approvalStatus),
+                            style: AppTextStyles.caption.copyWith(
+                              color: _approvalColor(vehicle.approvalStatus),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
                         Text(
                           '${vehicle.brand} ${vehicle.model}',
                           style: AppTextStyles.titleMedium,
@@ -157,6 +235,26 @@ class VehiclePage extends ConsumerWidget {
                           '${vehicle.color} • Placa: ${vehicle.plate}',
                           style: AppTextStyles.bodySmall,
                         ),
+                        if (vehicle.licensePhotoUrl != null) ...[
+                          const SizedBox(height: 16),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              'Matrícula',
+                              style: AppTextStyles.bodySmall,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(12),
+                            child: CachedNetworkImage(
+                              imageUrl: vehicle.licensePhotoUrl!,
+                              width: double.infinity,
+                              height: 140,
+                              fit: BoxFit.cover,
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -173,5 +271,27 @@ class VehiclePage extends ConsumerWidget {
         },
       ),
     );
+  }
+}
+
+String _approvalLabel(String status) {
+  switch (status) {
+    case VehicleApprovalStatus.approved:
+      return 'Vehículo aprobado';
+    case VehicleApprovalStatus.rejected:
+      return 'Vehículo rechazado';
+    default:
+      return 'Aprobación pendiente';
+  }
+}
+
+Color _approvalColor(String status) {
+  switch (status) {
+    case VehicleApprovalStatus.approved:
+      return AppColors.success;
+    case VehicleApprovalStatus.rejected:
+      return AppColors.error;
+    default:
+      return AppColors.warning;
   }
 }

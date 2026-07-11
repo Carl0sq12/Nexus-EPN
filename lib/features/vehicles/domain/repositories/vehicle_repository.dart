@@ -13,11 +13,28 @@ abstract class VehicleRepository {
     String model,
     String color,
     String plate,
+    String? licensePhotoUrl,
   );
 
   /// Updates specific [fields] for the vehicle identified by [vehicleId].
   Future<Vehicle> updateVehicle(String vehicleId, Map<String, dynamic> fields);
 
   /// Uploads a vehicle photo [file] and returns the public URL.
-  Future<String> uploadVehiclePhoto(String vehicleId, File file);
+  Future<String> uploadVehiclePhoto(
+    String vehicleId,
+    File file, {
+    String? previousUrl,
+    String? ownerUserId,
+  });
+
+  /// Uploads the vehicle registration/license photo and returns its URL.
+  Future<String> uploadLicensePhoto(
+    String vehicleId,
+    File file, {
+    String? previousUrl,
+    String? ownerUserId,
+  });
+
+  /// Deletes a vehicle and its uploaded photos.
+  Future<void> deleteVehicle(String vehicleId);
 }

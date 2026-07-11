@@ -1,9 +1,9 @@
+import 'package:appwrite/appwrite.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nexus_campus/core/errors/failure.dart';
 import 'package:nexus_campus/features/trips/data/datasources/trip_remote_datasource.dart';
 import 'package:nexus_campus/features/trips/data/models/trip_model.dart';
 import 'package:nexus_campus/features/trips/data/repositories/trip_repository_impl.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 void main() {
   group('TripRepositoryImpl', () {
@@ -77,7 +77,7 @@ class _FakeTripRemoteDatasource implements TripRemoteDatasource {
   });
 
   @override
-  SupabaseClient get client => throw UnimplementedError();
+  Databases get databases => throw UnimplementedError();
 
   void _throwIfNeeded() {
     if (error != null) throw error!;
@@ -116,6 +116,7 @@ class _FakeTripRemoteDatasource implements TripRemoteDatasource {
     double? destinationLongitude,
     double? routeDistanceMeters,
     double? routeDurationSeconds,
+    String? routePoints,
   }) async {
     _throwIfNeeded();
     return availableTrips.first;

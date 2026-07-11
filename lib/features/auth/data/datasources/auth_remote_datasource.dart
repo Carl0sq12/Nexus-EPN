@@ -1,122 +1,197 @@
-import 'package:supabase_flutter/supabase_flutter.dart';
-import '../../../../core/network/supabase_client.dart';
-import '../../../../core/errors/exceptions.dart' show ServerException;
+import 'dart:io';
+
+import 'package:appwrite/appwrite.dart';
+
+import '../../../../core/config/appwrite_config.dart';
+import '../../../../core/errors/exceptions.dart' show ServerException, AuthException;
+import '../../../../core/network/appwrite_helpers.dart';
 import '../models/auth_user_model.dart';
 
-/// Datasource remoto que realiza llamadas a Supabase Auth y a la tabla
-/// `profiles` para obtener/crear información del usuario.
+/// Remote datasource for Appwrite Account + profiles collection.
 class AuthRemoteDatasource {
-  final SupabaseClient _client = supabaseClient;
+  AuthRemoteDatasource({
+    required Account account,
+    required Databases databases,
+  })  : _account = account,
+        _databases = databases;
 
-  // URLs de redirección para los flujos de confirmación de correo y
-  // recuperación de contraseña. Deben coincidir EXACTO con las URLs
-  // agregadas en Supabase Dashboard > Authentication > URL Configuration.
+  final Account _account;
+  final Databases _databases;
+
   static const String _confirmSignUpRedirect =
-      'https://nexus-five-chi.vercel.app/auth-callback';
+      'https://nexus-five-chi.vercel.app/auth-callback.html';
   static const String _resetPasswordRedirect =
-      'https://nexus-five-chi.vercel.app/reset-password';
+      'https://nexus-five-chi.vercel.app/reset-password.html';
 
-  /// Inicia sesión y devuelve el usuario con su perfil si existe.
+  static const String _networkErrorMessage =
+      'Sin conexión a internet. Revisa Wi‑Fi o datos móviles e inténtalo de nuevo.';
+
+  Never _throwMapped(Object e) {
+    if (_isNetworkFailure(e)) {
+      throw const AuthException(_networkErrorMessage);
+    }
+    if (e is AppwriteException) {
+      throw AuthException(_mapAppwriteAuthMessage(e));
+    }
+    throw ServerException(e.toString());
+  }
+
+  String _mapAppwriteAuthMessage(AppwriteException e) {
+    final text = '${e.message ?? ''} ${e.type ?? ''} ${e.code ?? ''}'.toLowerCase();
+    if (text.contains('user_already_exists') ||
+        text.contains('already exists') ||
+        text.contains('user with the same id') ||
+        text.contains('a user with the same')) {
+      return 'Ese correo ya tiene una cuenta en Auth (no basta borrar el perfil '
+          'en la base de datos). En Appwrite Console → Auth → Users bórralo '
+          'y vuelve a registrarte.';
+    }
+    return e.message ?? e.toString();
+  }
+
+  bool _isNetworkFailure(Object e) {
+    if (e is SocketException) return true;
+    final text = e.toString().toLowerCase();
+    return text.contains('socketexception') ||
+        text.contains('failed host lookup') ||
+        text.contains('network is unreachable') ||
+        text.contains('connection refused') ||
+        text.contains('connection reset') ||
+        text.contains('timed out') ||
+        text.contains('clientexception');
+  }
+
   Future<AuthUserModel> signIn(String email, String password) async {
     try {
-      final res = await _client.auth.signInWithPassword(
+      await _account.createEmailPasswordSession(
         email: email,
         password: password,
       );
-      final user = res.user;
-      if (user == null) throw ServerException('No user returned from auth');
+      final user = await _account.get();
 
-      // Try to fetch profile from `profiles` table
-      final profileResp = await _client
-          .from('profiles')
-          .select()
-          .eq('id', user.id)
-          .maybeSingle();
-
-      if (profileResp != null) {
-        return AuthUserModel.fromJson(profileResp);
+      try {
+        final doc = await _databases.getDocument(
+          databaseId: AppwriteConfig.databaseId,
+          collectionId: AppwriteConfig.collectionProfiles,
+          documentId: user.$id,
+        );
+        return AuthUserModel.fromJson(normalizeDocument(doc));
+      } on AppwriteException {
+        return AuthUserModel(
+          id: user.$id,
+          email: user.email.isNotEmpty ? user.email : email,
+          role: 'passenger',
+        );
       }
-      return AuthUserModel(
-        id: user.id,
-        email: user.email ?? email,
-        role: 'passenger',
-      );
-    } on AuthException {
-      rethrow;
     } catch (e) {
-      throw ServerException(e.toString());
+      _throwMapped(e);
     }
   }
 
-  /// Registra usuario en Supabase Auth.
-  ///
-  /// IMPORTANTE: la fila en `profiles` NO se crea manualmente acá.
-  /// Existe un trigger `on_auth_user_created` en `auth.users` (función
-  /// `handle_new_user`) que crea la fila automáticamente leyendo
-  /// `role` y `full_name` desde `raw_user_meta_data`. Por eso es
-  /// obligatorio mandar esos valores en el parámetro `data` de
-  /// `signUp`. Si además se hiciera un insert manual acá, se rompería
-  /// por llave duplicada (el trigger ya insertó esa fila).
   Future<AuthUserModel> signUp({
     required String email,
     required String password,
     required String role,
     String? fullName,
   }) async {
-    try {
-      final res = await _client.auth.signUp(
-        email: email,
-        password: password,
-        emailRedirectTo: _confirmSignUpRedirect,
-        data: {'role': role, 'full_name': fullName},
+    final normalizedEmail = email.trim().toLowerCase();
+    final epnEmail = RegExp(
+      r'^[\w.+-]+@epn\.edu\.ec$',
+      caseSensitive: false,
+    );
+    if (!epnEmail.hasMatch(normalizedEmail)) {
+      throw const AuthException(
+        'Usa tu correo institucional @epn.edu.ec',
       );
-      final user = res.user;
-      if (user == null) throw ServerException('Failed to create auth user');
+    }
 
-      // El trigger on_auth_user_created ya creó la fila en profiles.
-      // Solo la leemos para devolver el modelo completo.
-      final profile = await _client
-          .from('profiles')
-          .select()
-          .eq('id', user.id)
-          .maybeSingle();
+    try {
+      final user = await _account.create(
+        userId: ID.unique(),
+        email: normalizedEmail,
+        password: password,
+        name: fullName,
+      );
 
-      if (profile == null) {
-        // Fallback por si el trigger aún no terminó de commitear
-        // (poco probable, pero evita romper el flujo de la UI).
-        return AuthUserModel(
-          id: user.id,
-          email: email,
-          fullName: fullName,
-          role: role,
-        );
+      await _account.createEmailPasswordSession(
+        email: normalizedEmail,
+        password: password,
+      );
+
+      final profileData = <String, dynamic>{
+        'email': normalizedEmail,
+        'role': role,
+        if (fullName != null) 'full_name': fullName,
+      };
+
+      final doc = await _databases.createDocument(
+        databaseId: AppwriteConfig.databaseId,
+        collectionId: AppwriteConfig.collectionProfiles,
+        documentId: user.$id,
+        data: profileData,
+        permissions: ownerPermissions(user.$id),
+      );
+
+      try {
+        await _sendVerificationEmail();
+      } catch (_) {
+        // Account already exists; user can resend from verify-email screen.
       }
-      return AuthUserModel.fromJson(profile);
-    } on AuthException {
-      rethrow;
+
+      return AuthUserModel.fromJson(normalizeDocument(doc));
     } catch (e) {
-      throw ServerException(e.toString());
+      _throwMapped(e);
     }
   }
 
-  /// Cierra la sesión actual.
+  /// Resends the Appwrite email-verification link for the current session.
+  Future<void> resendVerification() async {
+    try {
+      await _sendVerificationEmail();
+    } catch (e) {
+      throw AuthException(_mapVerificationError(e));
+    }
+  }
+
+  Future<void> _sendVerificationEmail() async {
+    await _account.createVerification(url: _confirmSignUpRedirect);
+  }
+
+  String _mapVerificationError(Object e) {
+    if (_isNetworkFailure(e)) {
+      return _networkErrorMessage;
+    }
+    final text = e.toString().toLowerCase();
+    if (text.contains('url') ||
+        text.contains('host must be') ||
+        text.contains('invalid `url`') ||
+        text.contains('invalid url')) {
+      return 'Appwrite rechazó la URL de verificación. En Console → Platforms '
+          'agrega Web: nexus-five-chi.vercel.app y en Auth → Settings las '
+          'Redirect URLs del proyecto.';
+    }
+    if (e is AppwriteException) {
+      return e.message ?? e.toString();
+    }
+    return e.toString();
+  }
+
   Future<void> signOut() async {
     try {
-      await _client.auth.signOut();
+      await _account.deleteSession(sessionId: 'current');
     } catch (e) {
-      throw ServerException(e.toString());
+      _throwMapped(e);
     }
   }
 
-  /// Solicita restablecimiento de contraseña por correo.
   Future<void> resetPassword(String email) async {
     try {
-      await _client.auth.resetPasswordForEmail(
-        email,
-        redirectTo: _resetPasswordRedirect,
+      await _account.createRecovery(
+        email: email,
+        url: _resetPasswordRedirect,
       );
     } catch (e) {
-      throw ServerException(e.toString());
+      _throwMapped(e);
     }
   }
 }

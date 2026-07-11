@@ -1,12 +1,15 @@
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:appwrite/appwrite.dart';
+
+import '../../../../core/config/appwrite_config.dart';
 import '../../../../core/errors/exceptions.dart';
+import '../../../../core/network/appwrite_helpers.dart';
 import '../models/sos_alert_model.dart';
 
-/// Remote datasource for SOS emergency alerts using Supabase.
+/// Remote datasource for SOS emergency alerts using Appwrite Databases.
 class SosRemoteDatasource {
-  final SupabaseClient client;
+  final Databases databases;
 
-  const SosRemoteDatasource(this.client);
+  const SosRemoteDatasource(this.databases);
 
   Future<SosAlertModel> sendSosAlert(
     String userId,
@@ -16,18 +19,20 @@ class SosRemoteDatasource {
     String type,
   ) async {
     try {
-      final response = await client
-          .from('sos_alerts')
-          .insert({
-            'user_id': userId,
-            'latitude': latitude,
-            'longitude': longitude,
-            'message': message,
-            'type': type,
-          })
-          .select()
-          .single();
-      return SosAlertModel.fromJson(response);
+      final doc = await databases.createDocument(
+        databaseId: AppwriteConfig.databaseId,
+        collectionId: AppwriteConfig.collectionSosAlerts,
+        documentId: ID.unique(),
+        data: {
+          'user_id': userId,
+          'latitude': latitude,
+          'longitude': longitude,
+          'message': message,
+          'type': type,
+        },
+        permissions: ownerPermissions(userId),
+      );
+      return SosAlertModel.fromJson(normalizeDocument(doc));
     } catch (e) {
       throw ServerException(e.toString());
     }

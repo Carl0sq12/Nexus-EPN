@@ -5,8 +5,9 @@ import 'package:go_router/go_router.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/constants/app_strings.dart';
 import '../../../../core/constants/app_text_styles.dart';
-import '../../../../core/providers/supabase_provider.dart';
+import '../../../../core/providers/appwrite_provider.dart';
 import '../../../../core/providers/session_data_provider.dart';
+import '../../../../core/widgets/app_state_views.dart';
 import '../../../../core/widgets/custom_button.dart';
 import '../../../onboarding/presentation/providers/onboarding_provider.dart';
 import '../../../sos/presentation/providers/emergency_contacts_provider.dart';
@@ -48,8 +49,10 @@ class _OnboardingContactsPageState
 
   @override
   Widget build(BuildContext context) {
-    final userId = ref.watch(authStateProvider).value?.session?.user.id;
-    if (userId == null) return const Scaffold(body: SizedBox.shrink());
+    final userId = ref.watch(currentUserIdProvider);
+    if (userId == null) {
+      return const Scaffold(body: AppLoadingView(message: 'Cargando sesión...'));
+    }
 
     return Scaffold(
       backgroundColor: AppColors.background,

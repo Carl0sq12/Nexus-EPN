@@ -6,21 +6,24 @@ import 'package:intl/intl.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/constants/app_text_styles.dart';
 import '../../../../core/constants/app_strings.dart';
-import '../../../../core/providers/supabase_provider.dart';
+import '../../../../core/providers/appwrite_provider.dart';
 import '../../../onboarding/presentation/providers/onboarding_provider.dart';
 import '../../../profile/presentation/providers/profile_provider.dart';
 import '../../../requests/domain/entities/trip_request.dart';
 import '../../../requests/presentation/providers/request_provider.dart';
+import '../../../../core/utils/trip_search.dart';
 import '../providers/trip_provider.dart';
 
 /// Page showing available trips with Coastal Wave card design.
 class TripsListPage extends ConsumerWidget {
-  const TripsListPage({super.key});
+  final String? destinationQuery;
+
+  const TripsListPage({this.destinationQuery, super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final authState = ref.watch(authStateProvider);
-    final userId = authState.value?.session?.user.id;
+    final userId = authState.value?.userId;
     final profileAsync = userId == null
         ? null
         : ref.watch(profileProvider(userId));
@@ -31,16 +34,25 @@ class TripsListPage extends ConsumerWidget {
         ) ??
         false;
     final canUseDriverFeatures = ref.watch(driverCanUseDriverFeaturesProvider);
+    final query = destinationQuery?.trim();
 
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
-        title: const Text('Viajes'),
+        title: Text(
+          query != null && query.isNotEmpty ? 'Viajes a $query' : 'Viajes',
+        ),
         flexibleSpace: Container(
           decoration: const BoxDecoration(gradient: AppColors.primaryGradient),
         ),
         foregroundColor: Colors.white,
         actions: [
+          if (!isDriver)
+            IconButton(
+              tooltip: 'Buscar destino',
+              icon: const Icon(Icons.search),
+              onPressed: () => context.push(AppStrings.routeTripsSearch),
+            ),
           if (canUseDriverFeatures) ...[
             IconButton(
               tooltip: 'Mis viajes',
@@ -65,7 +77,7 @@ class TripsListPage extends ConsumerWidget {
                     isDriver: isDriver,
                     canUseDriverFeatures: canUseDriverFeatures,
                   )
-                : _PassengerTripsList(),
+                : _PassengerTripsList(destinationQuery: query),
           ),
         ],
       ),
@@ -115,42 +127,71 @@ class _RoleLockedHeader extends StatelessWidget {
 }
 
 class _PassengerTripsList extends ConsumerWidget {
+  final String? destinationQuery;
+
+  const _PassengerTripsList({this.destinationQuery});
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final authState = ref.watch(authStateProvider);
-    final userId = authState.value?.session?.user.id;
+    final userId = authState.value?.userId;
     final requestsAsync = userId == null
         ? null
         : ref.watch(myRequestsProvider(userId));
+    final query = destinationQuery?.trim().toLowerCase();
 
     return ref
         .watch(availableTripsProvider)
         .when(
           loading: () => const Center(child: CircularProgressIndicator()),
           error: (e, _) => Center(child: Text(e.toString())),
-          data: (trips) {
+          data: (allTrips) {
+            final trips = filterTripsByDestinationQuery(allTrips, query);
+
             if (trips.isEmpty) {
-              return ListView(
-                padding: const EdgeInsets.all(16),
-                children: [
-                  if (requestsAsync != null) ...[
-                    _PassengerRequestsPreview(requestsAsync: requestsAsync),
-                    const SizedBox(height: 16),
-                  ],
-                  const SizedBox(height: 80),
-                  const Icon(
-                    Icons.directions_car,
-                    size: 64,
-                    color: AppColors.primaryLight,
-                  ),
-                  const SizedBox(height: 16),
-                  const Center(
-                    child: Text(
-                      'No hay viajes disponibles',
-                      style: AppTextStyles.bodyMedium,
+              return RefreshIndicator(
+                onRefresh: () async {
+                  ref.invalidate(availableTripsProvider);
+                  if (userId != null) {
+                    ref.invalidate(myRequestsProvider(userId));
+                  }
+                },
+                child: ListView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.all(16),
+                  children: [
+                    if (requestsAsync != null) ...[
+                      _PassengerRequestsPreview(requestsAsync: requestsAsync),
+                      const SizedBox(height: 24),
+                    ],
+                    const Icon(
+                      Icons.directions_car,
+                      size: 64,
+                      color: AppColors.primaryLight,
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 16),
+                    Center(
+                      child: Text(
+                        query != null && query.isNotEmpty
+                            ? 'No hay viajes hacia ese destino'
+                            : 'No hay viajes disponibles',
+                        style: AppTextStyles.bodyMedium,
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                    if (query != null && query.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      Center(
+                        child: TextButton.icon(
+                          onPressed: () =>
+                              context.push(AppStrings.routeTripsSearch),
+                          icon: const Icon(Icons.search),
+                          label: const Text('Buscar otro destino'),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
               );
             }
 
@@ -168,9 +209,14 @@ class _PassengerTripsList extends ConsumerWidget {
                 final trip = trips[tripIndex];
                 final time = DateFormat('hh:mm a').format(trip.departureTime);
                 final price = '\$${trip.pricePerSeat.toStringAsFixed(2)}';
-                final hasActiveRequest = _hasActiveRequestForTrip(
+                final activeRequest = _activeRequestForTrip(
                   requestsAsync,
                   trip.id,
+                );
+                final driverAsync = ref.watch(profileProvider(trip.driverId));
+                final driverName = driverAsync.maybeWhen(
+                  data: (profile) => profile.fullName,
+                  orElse: () => 'Conductor',
                 );
 
                 return Card(
@@ -226,6 +272,17 @@ class _PassengerTripsList extends ConsumerWidget {
                                   ),
                                   const SizedBox(height: 4),
                                   Text(time, style: AppTextStyles.labelSmall),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Conductor: $driverName',
+                                    style: AppTextStyles.bodySmall,
+                                  ),
+                                  Text(
+                                    'Ubicación aproximada: ${trip.origin}',
+                                    style: AppTextStyles.bodySmall.copyWith(
+                                      color: AppColors.textSecondary,
+                                    ),
+                                  ),
                                 ],
                               ),
                             ),
@@ -363,7 +420,7 @@ class _PassengerTripsList extends ConsumerWidget {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  'Precio base',
+                                  'Precio por asiento',
                                   style: AppTextStyles.labelSmall,
                                 ),
                                 Text(price, style: AppTextStyles.titleMedium),
@@ -375,13 +432,41 @@ class _PassengerTripsList extends ConsumerWidget {
                                 SizedBox(
                                   height: 44,
                                   child: ElevatedButton(
-                                    onPressed: () => context.push(
-                                      hasActiveRequest
-                                          ? '/trips/${trip.id}'
-                                          : '/trips/${trip.id}/request',
-                                    ),
+                                    onPressed: activeRequest == null
+                                        ? () => context.push(
+                                            '/trips/${trip.id}',
+                                          )
+                                        : () async {
+                                            await ref
+                                                .read(
+                                                  requestNotifierProvider
+                                                      .notifier,
+                                                )
+                                                .cancelRequest(
+                                                  activeRequest.id,
+                                                  tripId: trip.id,
+                                                  passengerId: userId!,
+                                                );
+                                            if (!context.mounted) return;
+                                            final state = ref.read(
+                                              requestNotifierProvider,
+                                            );
+                                            ScaffoldMessenger.of(
+                                              context,
+                                            ).showSnackBar(
+                                              SnackBar(
+                                                content: Text(
+                                                  state.hasError
+                                                      ? state.error.toString()
+                                                      : 'Solicitud cancelada',
+                                                ),
+                                              ),
+                                            );
+                                          },
                                     style: ElevatedButton.styleFrom(
-                                      backgroundColor: AppColors.primary,
+                                      backgroundColor: activeRequest == null
+                                          ? AppColors.primary
+                                          : AppColors.error,
                                       foregroundColor: Colors.white,
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(14),
@@ -392,9 +477,9 @@ class _PassengerTripsList extends ConsumerWidget {
                                       ),
                                     ),
                                     child: Text(
-                                      hasActiveRequest
-                                          ? 'Ver estado'
-                                          : 'Solicitar',
+                                      activeRequest == null
+                                          ? 'Solicitar'
+                                          : 'Cancelar',
                                       style: AppTextStyles.labelMedium.copyWith(
                                         color: Colors.white,
                                       ),
@@ -420,16 +505,20 @@ class _PassengerTripsList extends ConsumerWidget {
         );
   }
 
-  bool _hasActiveRequestForTrip(
+  TripRequest? _activeRequestForTrip(
     AsyncValue<List<TripRequest>>? requestsAsync,
     String tripId,
   ) {
     final requests = requestsAsync?.asData?.value ?? const <TripRequest>[];
-    return requests.any(
-      (request) =>
-          request.tripId == tripId &&
-          request.status != AppStrings.statusRejected,
-    );
+    for (final request in requests) {
+      if (request.tripId == tripId &&
+          (request.status == AppStrings.statusPending ||
+              request.status == AppStrings.statusAccepted ||
+              request.status == AppStrings.statusPriceProposed)) {
+        return request;
+      }
+    }
+    return null;
   }
 }
 
@@ -494,15 +583,19 @@ class _PassengerRequestsPreview extends StatelessWidget {
   }
 }
 
-class _PassengerRequestTile extends StatelessWidget {
+class _PassengerRequestTile extends ConsumerWidget {
   final TripRequest request;
 
   const _PassengerRequestTile({required this.request});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final color = _statusColor(request.status);
     final proposed = request.proposedPrice;
+    final canCancel =
+        request.status == AppStrings.statusPending ||
+        request.status == AppStrings.statusAccepted ||
+        request.status == AppStrings.statusPriceProposed;
     return InkWell(
       borderRadius: BorderRadius.circular(14),
       onTap: () => context.push('/trips/${request.tripId}'),
@@ -539,7 +632,32 @@ class _PassengerRequestTile extends StatelessWidget {
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right, color: AppColors.primary),
+            if (canCancel)
+              TextButton(
+                onPressed: () async {
+                  await ref
+                      .read(requestNotifierProvider.notifier)
+                      .cancelRequest(
+                        request.id,
+                        tripId: request.tripId,
+                        passengerId: request.passengerId,
+                      );
+                  if (!context.mounted) return;
+                  final state = ref.read(requestNotifierProvider);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        state.hasError
+                            ? state.error.toString()
+                            : 'Solicitud cancelada',
+                      ),
+                    ),
+                  );
+                },
+                child: const Text('Cancelar'),
+              )
+            else
+              const Icon(Icons.chevron_right, color: AppColors.primary),
           ],
         ),
       ),
@@ -551,6 +669,7 @@ class _PassengerRequestTile extends StatelessWidget {
       AppStrings.statusAccepted => 'Aceptada',
       AppStrings.statusPriceProposed => 'Precio propuesto',
       AppStrings.statusRejected => 'Rechazada',
+      AppStrings.statusCancelled => 'Cancelada',
       _ => 'Esperando precio',
     };
   }
@@ -560,6 +679,7 @@ class _PassengerRequestTile extends StatelessWidget {
       AppStrings.statusAccepted => Icons.check_circle_outline,
       AppStrings.statusPriceProposed => Icons.payments_outlined,
       AppStrings.statusRejected => Icons.cancel_outlined,
+      AppStrings.statusCancelled => Icons.cancel_outlined,
       _ => Icons.schedule,
     };
   }
@@ -569,6 +689,7 @@ class _PassengerRequestTile extends StatelessWidget {
       AppStrings.statusAccepted => AppColors.success,
       AppStrings.statusPriceProposed => AppColors.primary,
       AppStrings.statusRejected => AppColors.error,
+      AppStrings.statusCancelled => AppColors.error,
       _ => AppColors.warning,
     };
   }

@@ -3,7 +3,7 @@ import '../../domain/entities/sos_alert.dart';
 import '../../domain/repositories/sos_repository.dart';
 import '../datasources/sos_remote_datasource.dart';
 
-/// Implementation of [SosRepository] using Supabase.
+/// Implementation of [SosRepository] using Appwrite.
 class SosRepositoryImpl implements SosRepository {
   final SosRemoteDatasource remoteDatasource;
 

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/constants/app_colors.dart';
 import 'core/constants/app_strings.dart';
 import 'core/router/app_router.dart';
+import 'core/services/local_notification_service.dart';
 
 /// Root widget of the application. Configures theming and routing.
 class NexusCampusApp extends ConsumerWidget {
@@ -10,6 +11,7 @@ class NexusCampusApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    ref.watch(notificationListenerBootstrapProvider);
     final router = ref.watch(routerProvider);
 
     return MaterialApp.router(

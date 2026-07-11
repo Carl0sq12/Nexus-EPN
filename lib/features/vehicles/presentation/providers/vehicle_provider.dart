@@ -1,8 +1,11 @@
 import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../../core/providers/supabase_provider.dart';
+import '../../../../core/constants/app_strings.dart';
+import '../../../../core/providers/appwrite_provider.dart';
 import '../../../../core/providers/session_data_provider.dart';
+import '../../../profile/domain/usecases/update_profile_usecase.dart';
+import '../../../profile/presentation/providers/profile_provider.dart';
 import '../../domain/entities/vehicle.dart';
 import '../../domain/usecases/get_my_vehicle_usecase.dart';
 import '../../domain/usecases/create_vehicle_usecase.dart';
@@ -12,7 +15,10 @@ import '../../data/repositories/vehicle_repository_impl.dart';
 
 /// Provider for the vehicle remote datasource.
 final vehicleDatasourceProvider = Provider<VehicleRemoteDatasource>((ref) {
-  return VehicleRemoteDatasource(ref.watch(supabaseClientProvider));
+  return VehicleRemoteDatasource(
+    ref.watch(databasesProvider),
+    ref.watch(storageProvider),
+  );
 });
 
 /// Provider for the vehicle repository.
@@ -29,7 +35,7 @@ final myVehicleProvider = FutureProvider.family<Vehicle?, String>((
   return useCase(GetMyVehicleParams(driverId: driverId));
 });
 
-/// State notifier that manages vehicle create/update actions.
+/// State notifier that manages vehicle CRUD actions.
 class VehicleNotifier extends StateNotifier<AsyncValue<void>> {
   final Ref ref;
 
@@ -62,13 +68,14 @@ class VehicleNotifier extends StateNotifier<AsyncValue<void>> {
     }
   }
 
-  Future<void> createVehicleWithPhoto(
+  Future<void> createVehicleWithPhotos(
     String driverId,
     String brand,
     String model,
     String color,
     String plate,
-    File photo,
+    File vehiclePhoto,
+    File licensePhoto,
   ) async {
     state = const AsyncValue.loading();
     try {
@@ -87,12 +94,25 @@ class VehicleNotifier extends StateNotifier<AsyncValue<void>> {
         ),
       );
       final repository = ref.read(vehicleRepositoryProvider);
-      final photoUrl = await repository.uploadVehiclePhoto(vehicle.id, photo);
+      final photoUrl = await repository.uploadVehiclePhoto(
+        vehicle.id,
+        vehiclePhoto,
+        ownerUserId: driverId,
+      );
+      final licensePhotoUrl = await repository.uploadLicensePhoto(
+        vehicle.id,
+        licensePhoto,
+        ownerUserId: driverId,
+      );
       final updateUseCase = UpdateVehicleUseCase(repository);
       await updateUseCase(
         UpdateVehicleParams(
           vehicleId: vehicle.id,
-          fields: {'photo_url': photoUrl},
+          fields: {
+            'photo_url': photoUrl,
+            'license_photo_url': licensePhotoUrl,
+            'approval_status': VehicleApprovalStatus.pending,
+          },
         ),
       );
       ref.invalidate(myVehicleProvider(driverId));
@@ -119,9 +139,30 @@ class VehicleNotifier extends StateNotifier<AsyncValue<void>> {
       state = AsyncValue.error(e, st);
     }
   }
+
+  Future<void> deleteVehicle(String vehicleId, String driverId) async {
+    state = const AsyncValue.loading();
+    try {
+      await ref.read(vehicleRepositoryProvider).deleteVehicle(vehicleId);
+      // Sin vehículo el usuario deja de ser conductor.
+      await ref.read(updateProfileUseCaseProvider)(
+        UpdateProfileParams(
+          userId: driverId,
+          role: AppStrings.rolePassenger,
+        ),
+      );
+      ref.invalidate(profileProvider(driverId));
+      ref.invalidate(myVehicleProvider(driverId));
+      // sessionDataVersion refreshes onboardingStatusProvider.
+      ref.read(sessionDataVersionProvider.notifier).state++;
+      state = const AsyncValue.data(null);
+    } catch (e, st) {
+      state = AsyncValue.error(e, st);
+    }
+  }
 }
 
-/// Provider for [VehicleNotifier] that exposes vehicle create/update actions.
+/// Provider for [VehicleNotifier] that exposes vehicle CRUD actions.
 final vehicleNotifierProvider =
     StateNotifierProvider<VehicleNotifier, AsyncValue<void>>((ref) {
       return VehicleNotifier(ref);

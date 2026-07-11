@@ -17,6 +17,7 @@ class CreateTripParams extends Equatable {
   final double? destinationLongitude;
   final double? routeDistanceMeters;
   final double? routeDurationSeconds;
+  final String? routePoints;
 
   const CreateTripParams({
     required this.driverId,
@@ -31,6 +32,7 @@ class CreateTripParams extends Equatable {
     this.destinationLongitude,
     this.routeDistanceMeters,
     this.routeDurationSeconds,
+    this.routePoints,
   });
 
   @override
@@ -47,6 +49,7 @@ class CreateTripParams extends Equatable {
     destinationLongitude,
     routeDistanceMeters,
     routeDurationSeconds,
+    routePoints,
   ];
 }
 
@@ -71,6 +74,7 @@ class CreateTripUseCase implements UseCase<Trip, CreateTripParams> {
       destinationLongitude: params.destinationLongitude,
       routeDistanceMeters: params.routeDistanceMeters,
       routeDurationSeconds: params.routeDurationSeconds,
+      routePoints: params.routePoints,
     );
   }
 }

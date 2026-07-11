@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../constants/app_strings.dart';
 import '../constants/app_colors.dart';
 import '../providers/session_data_provider.dart';
-import '../providers/supabase_provider.dart';
+import '../providers/appwrite_provider.dart';
+import '../../features/profile/presentation/providers/profile_provider.dart';
 
 // Real pages
 import '../../features/auth/presentation/pages/splash_page.dart';
@@ -17,6 +17,7 @@ import '../../features/auth/presentation/pages/verify_email_page.dart';
 import '../../features/auth/presentation/pages/onboarding_profile_page.dart';
 import '../../features/auth/presentation/pages/onboarding_vehicle_page.dart';
 import '../../features/auth/presentation/pages/onboarding_contacts_page.dart';
+import '../../features/auth/presentation/pages/vehicle_pending_page.dart';
 import '../../features/onboarding/domain/entities/onboarding_status.dart';
 import '../../features/onboarding/presentation/providers/onboarding_provider.dart';
 import '../../features/profile/presentation/pages/profile_page.dart';
@@ -24,20 +25,28 @@ import '../../features/profile/presentation/pages/edit_profile_page.dart';
 import '../../features/vehicles/presentation/pages/vehicle_page.dart';
 import '../../features/vehicles/presentation/pages/edit_vehicle_page.dart';
 import '../../features/trips/presentation/pages/trips_list_page.dart';
+import '../../features/trips/presentation/pages/destination_search_page.dart';
 import '../../features/trips/presentation/pages/my_trips_page.dart';
 import '../../features/trips/presentation/pages/create_trip_page.dart';
 import '../../features/trips/presentation/pages/trip_detail_page.dart';
 import '../../features/trips/presentation/pages/trip_navigation_page.dart';
+import '../../features/trips/presentation/pages/trip_report_page.dart';
 import '../../features/requests/presentation/pages/request_management_page.dart';
 import '../../features/requests/presentation/pages/passenger_trip_request_page.dart';
+import '../../features/requests/presentation/pages/requests_inbox_page.dart';
+import '../../features/requests/presentation/pages/request_detail_page.dart';
+import '../../features/requests/domain/entities/trip_request.dart';
 import '../../features/home/presentation/pages/home_page.dart';
 import '../../features/chat/presentation/pages/chat_page.dart';
 import '../../features/chat/presentation/pages/chat_list_page.dart';
 import '../../features/map/presentation/pages/map_page.dart';
 import '../../features/sos/presentation/pages/sos_page.dart';
+import '../../features/notifications/presentation/pages/notifications_page.dart';
+import '../../features/notifications/presentation/pages/security_settings_page.dart';
+import '../../features/trips/presentation/pages/passenger_history_page.dart';
 
 /// Exposes the application's GoRouter configured with redirect rules based on
-/// the Supabase auth state.
+/// the Appwrite auth state.
 final routerProvider = Provider<GoRouter>((ref) {
   final refreshListenable = ref.watch(routerRefreshProvider);
 
@@ -46,23 +55,40 @@ final routerProvider = Provider<GoRouter>((ref) {
     refreshListenable: refreshListenable,
     redirect: (context, state) {
       final authState = ref.read(authStateProvider);
-      final currentSession = ref
-          .read(supabaseClientProvider)
-          .auth
-          .currentSession;
+      final currentUserId = ref.read(currentUserIdProvider);
       final onboardingAsync = ref.read(onboardingStatusProvider);
-      final isLoadingSession = authState.isLoading && currentSession == null;
+      final isLoadingSession = authState.isLoading && currentUserId == null;
       final isAuthenticated =
-          authState.asData?.value.session != null || currentSession != null;
+          authState.asData?.value != null || currentUserId != null;
       final onAuthRoute = state.matchedLocation.startsWith('/auth');
       final onOnboardingRoute = state.matchedLocation.startsWith('/onboarding');
       final onSplash = state.matchedLocation == AppStrings.routeSplash;
+      final onHome = state.matchedLocation == AppStrings.routeHome ||
+          state.matchedLocation.startsWith('/home');
 
       if (isLoadingSession) {
         return onSplash ? null : AppStrings.routeSplash;
       }
       if (!isAuthenticated && !onAuthRoute) return AppStrings.routeLogin;
       if (!isAuthenticated) return null;
+
+      // Keep user on splash while onboarding loads; do NOT bounce away from
+      // an already-resolved home/onboarding screen on every reload.
+      if (onboardingAsync.isLoading) {
+        if (onSplash || onOnboardingRoute) return null;
+        // Stay put if we already have a previous successful status cached
+        // via previous data; otherwise go splash with visible loader.
+        final previous = onboardingAsync.asData?.value;
+        if (previous != null && previous.canEnterHome && onHome) {
+          return null;
+        }
+        return AppStrings.routeSplash;
+      }
+
+      if (onboardingAsync.hasError) {
+        // Stay on splash with retry UI; splash handles error display.
+        return onSplash ? null : AppStrings.routeSplash;
+      }
 
       final onboardingStatus = onboardingAsync.asData?.value;
       if (onboardingStatus == null) {
@@ -80,13 +106,18 @@ final routerProvider = Provider<GoRouter>((ref) {
       }
 
       if (onAuthRoute || onOnboardingRoute) return AppStrings.routeHome;
+      final matched = state.matchedLocation;
       final driverOnlyRoute =
-          state.matchedLocation == AppStrings.routeTripsNew ||
-          state.matchedLocation == AppStrings.routeMyTrips ||
-          state.matchedLocation.endsWith('/requests');
+          matched == AppStrings.routeTripsNew ||
+          matched == AppStrings.routeMyTrips ||
+          // Trip request management: /trips/:id/requests — NOT /requests inbox.
+          (matched.startsWith('${AppStrings.routeTrips}/') &&
+              matched.endsWith('/requests')) ||
+          matched.endsWith('/navigation');
       if (driverOnlyRoute &&
           (onboardingStatus.role != AppStrings.roleDriver ||
-              !onboardingStatus.hasVehicle)) {
+              !onboardingStatus.hasVehicle ||
+              !onboardingStatus.isVehicleApproved)) {
         return AppStrings.routeTrips;
       }
       return null;
@@ -121,6 +152,10 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const OnboardingVehiclePage(),
       ),
       GoRoute(
+        path: AppStrings.routeOnboardingVehiclePending,
+        builder: (context, state) => const VehiclePendingPage(),
+      ),
+      GoRoute(
         path: AppStrings.routeOnboardingContacts,
         builder: (context, state) => const OnboardingContactsPage(),
       ),
@@ -132,16 +167,48 @@ final routerProvider = Provider<GoRouter>((ref) {
             builder: (context, state) => const HomePage(),
           ),
           GoRoute(
-            path: AppStrings.routeTrips,
-            builder: (context, state) => const TripsListPage(),
+            path: AppStrings.routeNotifications,
+            builder: (context, state) => const NotificationsPage(),
+          ),
+          GoRoute(
+            path: AppStrings.routeRequests,
+            builder: (context, state) => const RequestsInboxPage(),
             routes: [
               GoRoute(
+                path: ':requestId',
+                builder: (context, state) => RequestDetailPage(
+                  requestId: state.pathParameters['requestId']!,
+                ),
+              ),
+            ],
+          ),
+          GoRoute(
+            path: AppStrings.routeSecurity,
+            builder: (context, state) => const SecuritySettingsPage(),
+          ),
+          GoRoute(
+            path: AppStrings.routeTrips,
+            builder: (context, state) => TripsListPage(
+              destinationQuery: state.uri.queryParameters['q'],
+            ),
+            routes: [
+              GoRoute(
+                path: 'search',
+                builder: (context, state) => const DestinationSearchPage(),
+              ),
+              GoRoute(
                 path: 'new',
-                builder: (context, state) => const CreateTripPage(),
+                builder: (context, state) => CreateTripPage(
+                  editTripId: state.uri.queryParameters['edit'],
+                ),
               ),
               GoRoute(
                 path: 'my',
                 builder: (context, state) => const MyTripsPage(),
+              ),
+              GoRoute(
+                path: 'history',
+                builder: (context, state) => const PassengerHistoryPage(),
               ),
               GoRoute(
                 path: ':id',
@@ -158,12 +225,20 @@ final routerProvider = Provider<GoRouter>((ref) {
                     path: 'request',
                     builder: (context, state) => PassengerTripRequestPage(
                       tripId: state.pathParameters['id']!,
+                      initialStop: state.extra is TripRequestStop
+                          ? state.extra as TripRequestStop
+                          : null,
                     ),
                   ),
                   GoRoute(
                     path: 'navigation',
                     builder: (context, state) =>
                         TripNavigationPage(tripId: state.pathParameters['id']!),
+                  ),
+                  GoRoute(
+                    path: 'report',
+                    builder: (context, state) =>
+                        TripReportPage(tripId: state.pathParameters['id']!),
                   ),
                 ],
               ),
@@ -215,12 +290,13 @@ final routerProvider = Provider<GoRouter>((ref) {
 final routerRefreshProvider = Provider<Listenable>((ref) {
   final notifier = _RouterRefreshNotifier();
 
-  ref.listen<AsyncValue<AuthState>>(authStateProvider, (previous, next) {
-    final previousUserId = previous?.asData?.value.session?.user.id;
-    final nextUserId = next.asData?.value.session?.user.id;
+  ref.listen<AsyncValue<AppAuthSession?>>(authStateProvider, (previous, next) {
+    final previousUserId = previous?.asData?.value?.userId;
+    final nextUserId = next.asData?.value?.userId;
     if (previousUserId != nextUserId || next.hasError) {
+      // Single invalidation path — do not also bump sessionDataVersion here
+      // (login already bumps it). Avoids double onboarding reload races.
       ref.invalidate(onboardingStatusProvider);
-      ref.read(sessionDataVersionProvider.notifier).state++;
     }
     notifier.notify();
   }, fireImmediately: true);
@@ -237,22 +313,56 @@ class _RouterRefreshNotifier extends ChangeNotifier {
 }
 
 /// Shell widget with bottom navigation bar for the main app sections.
-class MainShell extends StatelessWidget {
+class MainShell extends ConsumerWidget {
   final Widget child;
   const MainShell({required this.child, super.key});
 
-  static const _navRoutes = [
-    AppStrings.routeHome,
-    AppStrings.routeTrips,
-    AppStrings.routeSos,
-    AppStrings.routeChat,
-    AppStrings.routeProfile,
-  ];
-
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final location = GoRouterState.of(context).matchedLocation;
-    final currentIndex = _navRoutes.indexWhere((r) => location.startsWith(r));
+    final userId = ref.watch(currentUserIdProvider);
+    final isDriver = userId == null
+        ? false
+        : ref.watch(profileProvider(userId)).maybeWhen(
+              data: (profile) => profile.role == AppStrings.roleDriver,
+              orElse: () => false,
+            );
+
+    // Passengers use the header solicitudes icon; bottom nav has no Solicitudes tab.
+    final navRoutes = <String>[
+      AppStrings.routeHome,
+      if (isDriver) AppStrings.routeTrips,
+      AppStrings.routeSos,
+      AppStrings.routeChat,
+      AppStrings.routeProfile,
+    ];
+
+    var currentIndex = navRoutes.indexWhere((r) => location.startsWith(r));
+    if (currentIndex < 0) currentIndex = 0;
+
+    final items = <BottomNavigationBarItem>[
+      const BottomNavigationBarItem(
+        icon: Icon(Icons.home_outlined),
+        label: 'Inicio',
+      ),
+      if (isDriver)
+        const BottomNavigationBarItem(
+          icon: Icon(Icons.directions_car_outlined),
+          label: 'Viajes',
+        ),
+      const BottomNavigationBarItem(
+        icon: Icon(Icons.emergency_outlined),
+        label: 'Auxilio',
+      ),
+      const BottomNavigationBarItem(
+        icon: Icon(Icons.chat_bubble_outline),
+        label: 'Mensajes',
+      ),
+      const BottomNavigationBarItem(
+        icon: Icon(Icons.person_outline),
+        label: 'Perfil',
+      ),
+    ];
 
     return Scaffold(
       body: child,
@@ -265,35 +375,14 @@ class MainShell extends StatelessWidget {
           ),
         ),
         child: BottomNavigationBar(
-          currentIndex: currentIndex < 0 ? 0 : currentIndex,
-          onTap: (index) => context.go(_navRoutes[index]),
+          currentIndex: currentIndex,
+          onTap: (index) => context.go(navRoutes[index]),
           selectedItemColor: AppColors.primary,
           unselectedItemColor: AppColors.textSecondary,
           backgroundColor: AppColors.surface,
           type: BottomNavigationBarType.fixed,
           elevation: 0,
-          items: const [
-            BottomNavigationBarItem(
-              icon: Icon(Icons.home_outlined),
-              label: 'Inicio',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.directions_car_outlined),
-              label: 'Viajes',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.emergency_outlined),
-              label: 'Auxilio',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.chat_bubble_outline),
-              label: 'Mensajes',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.person_outline),
-              label: 'Perfil',
-            ),
-          ],
+          items: items,
         ),
       ),
     );
@@ -310,6 +399,8 @@ String _routeForOnboardingStep(OnboardingStep step) {
       return AppStrings.routeOnboardingProfile;
     case OnboardingStep.registerVehicle:
       return AppStrings.routeOnboardingVehicle;
+    case OnboardingStep.vehiclePending:
+      return AppStrings.routeOnboardingVehiclePending;
     case OnboardingStep.registerContacts:
       return AppStrings.routeOnboardingContacts;
     case OnboardingStep.home:

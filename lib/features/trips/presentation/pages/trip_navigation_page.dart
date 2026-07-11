@@ -1,21 +1,24 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/constants/app_strings.dart';
 import '../../../../core/constants/app_text_styles.dart';
-import '../../../../core/providers/supabase_provider.dart';
+import '../../../../core/providers/appwrite_provider.dart';
 import '../../../../core/widgets/custom_button.dart';
 import '../../../../core/widgets/loading_widget.dart';
 import '../../../map/presentation/providers/map_provider.dart';
-import '../../../ratings/presentation/providers/rating_provider.dart';
-import '../../../ratings/presentation/widgets/rating_dialog.dart';
 import '../../../requests/presentation/providers/request_provider.dart';
+import '../../../requests/domain/entities/trip_request.dart';
 import '../../domain/entities/trip.dart';
 import '../providers/trip_provider.dart';
+import '../utils/trip_completion.dart';
 
 /// In-app navigation view for a driver after starting a trip.
 class TripNavigationPage extends ConsumerStatefulWidget {
@@ -34,7 +37,7 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage> {
   @override
   Widget build(BuildContext context) {
     final authState = ref.watch(authStateProvider);
-    final userId = authState.value?.session?.user.id;
+    final userId = authState.value?.userId;
     final tripState = ref.watch(tripNotifierProvider);
 
     ref.listen(currentLocationStreamProvider, (previous, next) {
@@ -89,12 +92,27 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage> {
                       locationAsync.asData!.value.latitude,
                       locationAsync.asData!.value.longitude,
                     );
-              final routeStart = driverPoint ?? origin;
+              final driverHeading = _normalizedHeading(
+                locationAsync.asData?.value.heading,
+              );
+              // Ruta fija origen→destino para no martillar OSRM en cada GPS tick.
               final routeAsync = ref.watch(
                 routeInfoProvider(
-                  RouteRequest(origin: routeStart, destination: destination),
+                  RouteRequest(origin: origin, destination: destination),
                 ),
               );
+              final passengerStops = ref
+                  .watch(requestsByTripProvider(trip.id))
+                  .maybeWhen(
+                    data: (requests) => requests
+                        .where(
+                          (request) =>
+                              request.status == AppStrings.statusAccepted,
+                        )
+                        .expand((request) => request.stops)
+                        .toList(),
+                    orElse: () => const <TripRequestStop>[],
+                  );
 
               return Stack(
                 children: [
@@ -103,7 +121,14 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage> {
                     origin: origin,
                     destination: destination,
                     driverPoint: driverPoint,
+                    driverHeading: driverHeading,
                     routePoints: routeAsync.asData?.value.points,
+                    passengerStops: passengerStops,
+                  ),
+                  Positioned(
+                    top: 16,
+                    right: 16,
+                    child: _HeadingIndicator(heading: driverHeading),
                   ),
                   Positioned(
                     right: 16,
@@ -132,7 +157,7 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage> {
                             ref.invalidate(
                               routeInfoProvider(
                                 RouteRequest(
-                                  origin: routeStart,
+                                  origin: origin,
                                   destination: destination,
                                 ),
                               ),
@@ -180,14 +205,18 @@ class _NavigationMap extends StatelessWidget {
   final LatLng origin;
   final LatLng destination;
   final LatLng? driverPoint;
+  final double driverHeading;
   final List<LatLng>? routePoints;
+  final List<TripRequestStop> passengerStops;
 
   const _NavigationMap({
     required this.mapController,
     required this.origin,
     required this.destination,
     required this.driverPoint,
+    required this.driverHeading,
     required this.routePoints,
+    required this.passengerStops,
   });
 
   @override
@@ -239,9 +268,22 @@ class _NavigationMap extends StatelessWidget {
                 point: driverPoint!,
                 width: 58,
                 height: 58,
+                child: Transform.rotate(
+                  angle: driverHeading * math.pi / 180,
+                  child: const _MapMarker(
+                    icon: Icons.navigation,
+                    color: AppColors.success,
+                  ),
+                ),
+              ),
+            for (final stop in passengerStops)
+              Marker(
+                point: LatLng(stop.latitude, stop.longitude),
+                width: 48,
+                height: 48,
                 child: const _MapMarker(
-                  icon: Icons.navigation,
-                  color: AppColors.success,
+                  icon: Icons.person_pin_circle,
+                  color: AppColors.warning,
                 ),
               ),
           ],
@@ -369,6 +411,41 @@ class _MetricChip extends StatelessWidget {
   }
 }
 
+class _HeadingIndicator extends StatelessWidget {
+  final double heading;
+
+  const _HeadingIndicator({required this.heading});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: const [
+          BoxShadow(color: Color.fromRGBO(13, 111, 148, 0.12), blurRadius: 8),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Transform.rotate(
+            angle: heading * math.pi / 180,
+            child: const Icon(
+              Icons.navigation,
+              size: 18,
+              color: AppColors.primary,
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text('${heading.round()}°', style: AppTextStyles.bodySmall),
+        ],
+      ),
+    );
+  }
+}
+
 class _MapMarker extends StatelessWidget {
   final IconData icon;
   final Color color;
@@ -408,12 +485,20 @@ LatLng? _tripDestination(Trip trip) {
   return LatLng(latitude, longitude);
 }
 
+double _normalizedHeading(double? heading) {
+  if (heading == null || !heading.isFinite || heading < 0) return 0;
+  return heading % 360;
+}
+
 Future<void> _finishTrip(
   BuildContext context,
   WidgetRef ref,
   Trip trip,
   String driverId,
 ) async {
+  if (!await _isNearDestination(context, ref, trip)) return;
+  if (!context.mounted) return;
+
   final confirmed = await showDialog<bool>(
     context: context,
     builder: (dialogContext) => AlertDialog(
@@ -434,39 +519,69 @@ Future<void> _finishTrip(
 
   if (confirmed != true) return;
 
-  final requests = await ref.read(requestsByTripProvider(trip.id).future);
-  final acceptedRequests = requests
-      .where((request) => request.status == AppStrings.statusAccepted)
-      .toList();
-
-  await ref.read(tripNotifierProvider.notifier).updateTrip(trip.id, driverId, {
-    'status': AppStrings.statusCompleted,
-  });
-
-  for (final request in acceptedRequests) {
-    ref.invalidate(myRequestsProvider(request.passengerId));
-    ref.invalidate(pendingDriverRatingsProvider(request.passengerId));
-  }
-
-  if (!context.mounted) return;
-  ScaffoldMessenger.of(context).showSnackBar(
-    const SnackBar(content: Text('Viaje marcado como completado')),
+  final ok = await completeTripWithCleanup(
+    ref,
+    trip: trip,
+    driverId: driverId,
   );
-
-  for (final request in acceptedRequests) {
-    if (!context.mounted) return;
-    final result = await RatingDialog.show(context);
-    if (result == null) continue;
-    await ref
-        .read(ratingNotifierProvider.notifier)
-        .sendRating(
-          tripId: trip.id,
-          raterId: driverId,
-          ratedUserId: request.passengerId,
-          score: result.score,
-          comment: result.comment,
-        );
+  if (!context.mounted) return;
+  if (!ok) {
+    final nextState = ref.read(tripNotifierProvider);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(nextState.error?.toString() ?? 'No se pudo completar')),
+    );
+    return;
   }
 
-  if (context.mounted) context.pop();
+  ScaffoldMessenger.of(context).showSnackBar(
+    const SnackBar(content: Text('Viaje completado. Chat eliminado.')),
+  );
+  context.go('${AppStrings.routeTrips}/${trip.id}/report');
+}
+
+Future<bool> _isNearDestination(
+  BuildContext context,
+  WidgetRef ref,
+  Trip trip,
+) async {
+  final destinationLatitude = trip.destinationLatitude;
+  final destinationLongitude = trip.destinationLongitude;
+  if (destinationLatitude == null || destinationLongitude == null) return false;
+
+  try {
+    ref.invalidate(currentLocationProvider);
+    final location = await ref.read(currentLocationProvider.future);
+    final distanceMeters = Geolocator.distanceBetween(
+      location.latitude,
+      location.longitude,
+      destinationLatitude,
+      destinationLongitude,
+    );
+    if (distanceMeters <= 200) return true;
+    if (!context.mounted) return false;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Aún estás lejos del destino'),
+        content: Text(
+          'Debes estar a menos de 200 m para finalizar el viaje. '
+          'Distancia actual: ${distanceMeters.round()} m.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Entendido'),
+          ),
+        ],
+      ),
+    );
+    return false;
+  } catch (e) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo verificar tu ubicación: $e')),
+      );
+    }
+    return false;
+  }
 }

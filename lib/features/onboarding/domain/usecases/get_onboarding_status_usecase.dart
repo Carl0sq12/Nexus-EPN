@@ -1,4 +1,4 @@
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:appwrite/appwrite.dart';
 
 import '../../../profile/domain/repositories/profile_repository.dart';
 import '../../../sos/domain/repositories/emergency_contacts_repository.dart';
@@ -7,30 +7,36 @@ import '../entities/onboarding_status.dart';
 
 /// Evaluates the mandatory onboarding rules before a user can enter Home.
 class GetOnboardingStatusUseCase {
-  final SupabaseClient supabaseClient;
+  final Account account;
   final ProfileRepository profileRepository;
   final VehicleRepository vehicleRepository;
   final EmergencyContactsRepositoryContract emergencyContactsRepository;
 
   const GetOnboardingStatusUseCase({
-    required this.supabaseClient,
+    required this.account,
     required this.profileRepository,
     required this.vehicleRepository,
     required this.emergencyContactsRepository,
   });
 
   Future<OnboardingStatus> call() async {
-    // Rule 2: Splash/guards start by checking if a valid Supabase session exists.
-    final session = supabaseClient.auth.currentSession;
-    final user = session?.user;
-    if (user == null) return const OnboardingStatus.unauthenticated();
+    late final String userId;
+    late final bool hasVerifiedEmail;
 
-    // Rule 2/9: verified email is mandatory before Home.
-    final hasVerifiedEmail = user.emailConfirmedAt != null;
+    try {
+      final user = await account.get();
+      userId = user.$id;
+      hasVerifiedEmail = user.emailVerification;
+    } on AppwriteException {
+      return const OnboardingStatus.unauthenticated();
+    } catch (_) {
+      return const OnboardingStatus.unauthenticated();
+    }
+
     if (!hasVerifiedEmail) {
       return OnboardingStatus(
         step: OnboardingStep.verifyEmail,
-        userId: user.id,
+        userId: userId,
         role: null,
         hasVerifiedEmail: false,
         hasCompleteProfile: false,
@@ -39,18 +45,23 @@ class GetOnboardingStatusUseCase {
       );
     }
 
-    final profile = await profileRepository.getProfile(user.id);
-    final role = profile.role;
+    String? role;
+    var hasCompleteProfile = false;
+    try {
+      final profile = await profileRepository.getProfile(userId);
+      role = profile.role;
+      hasCompleteProfile =
+          profile.fullName.trim().isNotEmpty &&
+          profile.email.trim().isNotEmpty &&
+          (role == 'passenger' || role == 'driver');
+    } catch (_) {
+      hasCompleteProfile = false;
+    }
 
-    // Rule 2/9: profile is complete only when basic identity and role exist.
-    final hasCompleteProfile =
-        profile.fullName.trim().isNotEmpty &&
-        profile.email.trim().isNotEmpty &&
-        (role == 'passenger' || role == 'driver');
     if (!hasCompleteProfile) {
       return OnboardingStatus(
         step: OnboardingStep.completeProfile,
-        userId: user.id,
+        userId: userId,
         role: role,
         hasVerifiedEmail: true,
         hasCompleteProfile: false,
@@ -60,45 +71,74 @@ class GetOnboardingStatusUseCase {
     }
 
     var hasVehicle = true;
+    var isVehicleApproved = true;
     if (role == 'driver') {
-      // Rule 7/8/9: drivers cannot access Home or driver features without a vehicle.
-      final vehicle = await vehicleRepository.getMyVehicle(user.id);
-      hasVehicle = vehicle != null && vehicle.photoUrl != null;
+      try {
+        final vehicle = await vehicleRepository.getMyVehicle(userId);
+        hasVehicle =
+            vehicle != null &&
+            (vehicle.photoUrl?.isNotEmpty ?? false) &&
+            (vehicle.licensePhotoUrl?.isNotEmpty ?? false);
+        isVehicleApproved = vehicle?.isApproved ?? false;
+      } catch (_) {
+        hasVehicle = false;
+        isVehicleApproved = false;
+      }
       if (!hasVehicle) {
         return OnboardingStatus(
           step: OnboardingStep.registerVehicle,
-          userId: user.id,
+          userId: userId,
           role: role,
           hasVerifiedEmail: true,
           hasCompleteProfile: true,
           hasVehicle: false,
+          isVehicleApproved: false,
+          emergencyContactsCount: 0,
+        );
+      }
+      if (!isVehicleApproved) {
+        return OnboardingStatus(
+          step: OnboardingStep.vehiclePending,
+          userId: userId,
+          role: role,
+          hasVerifiedEmail: true,
+          hasCompleteProfile: true,
+          hasVehicle: true,
+          isVehicleApproved: false,
           emergencyContactsCount: 0,
         );
       }
     }
 
-    final contacts = await emergencyContactsRepository.getContacts(user.id);
-    final emergencyContactsCount = contacts.length;
+    var emergencyContactsCount = 0;
+    try {
+      final contacts = await emergencyContactsRepository.getContacts(userId);
+      emergencyContactsCount = contacts.length;
+    } catch (_) {
+      emergencyContactsCount = 0;
+    }
+
     if (emergencyContactsCount < 2) {
-      // Rule 7/9: every user must have at least two emergency contacts.
       return OnboardingStatus(
         step: OnboardingStep.registerContacts,
-        userId: user.id,
+        userId: userId,
         role: role,
         hasVerifiedEmail: true,
         hasCompleteProfile: true,
         hasVehicle: hasVehicle,
+        isVehicleApproved: isVehicleApproved,
         emergencyContactsCount: emergencyContactsCount,
       );
     }
 
     return OnboardingStatus(
       step: OnboardingStep.home,
-      userId: user.id,
+      userId: userId,
       role: role,
       hasVerifiedEmail: true,
       hasCompleteProfile: true,
       hasVehicle: hasVehicle,
+      isVehicleApproved: isVehicleApproved,
       emergencyContactsCount: emergencyContactsCount,
     );
   }

@@ -1,11 +1,14 @@
+import 'package:appwrite/appwrite.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+
+import '../../../../core/config/appwrite_config.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/constants/app_text_styles.dart';
 import '../../../../core/constants/app_strings.dart';
-import '../../../../core/providers/supabase_provider.dart';
+import '../../../../core/network/appwrite_helpers.dart';
+import '../../../../core/providers/appwrite_provider.dart';
 
 class ChatListPage extends ConsumerWidget {
   const ChatListPage({super.key});
@@ -13,7 +16,7 @@ class ChatListPage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final authState = ref.watch(authStateProvider);
-    final userId = authState.value?.session?.user.id;
+    final userId = authState.value?.userId;
 
     return Scaffold(
       appBar: AppBar(
@@ -41,6 +44,7 @@ class _ChatList extends ConsumerStatefulWidget {
 class _ChatListState extends ConsumerState<_ChatList> {
   List<Map<String, dynamic>> _trips = [];
   bool _loading = true;
+  String? _error;
 
   @override
   void initState() {
@@ -49,42 +53,55 @@ class _ChatListState extends ConsumerState<_ChatList> {
   }
 
   Future<void> _loadTrips() async {
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
-      final client = Supabase.instance.client;
+      final databases = ref.read(databasesProvider);
+      final db = AppwriteConfig.databaseId;
 
-      final driverTrips = await client
-          .from('trips')
-          .select()
-          .eq('driver_id', widget.userId)
-          .order('departure_time', ascending: false);
-
-      final acceptedRequests = await client
-          .from('trip_requests')
-          .select('trip_id')
-          .eq('passenger_id', widget.userId)
-          .eq('status', 'accepted');
-
-      final passengerTripIds = (acceptedRequests as List)
-          .map((r) => r['trip_id'] as String)
+      final driverResponse = await databases.listDocuments(
+        databaseId: db,
+        collectionId: AppwriteConfig.collectionTrips,
+        queries: [
+          Query.equal('driver_id', widget.userId),
+          Query.orderDesc('departure_time'),
+        ],
+      );
+      final driverTrips = driverResponse.documents
+          .map(normalizeDocument)
           .toList();
 
-      List<Map<String, dynamic>> passengerTrips = [];
-      if (passengerTripIds.isNotEmpty) {
-        final response = await client
-            .from('trips')
-            .select()
-            .inFilter('id', passengerTripIds)
-            .order('departure_time', ascending: false);
-        passengerTrips = (response as List)
-            .map((e) => Map<String, dynamic>.from(e))
-            .toList();
+      final acceptedRequests = await databases.listDocuments(
+        databaseId: db,
+        collectionId: AppwriteConfig.collectionTripRequests,
+        queries: [
+          Query.equal('passenger_id', widget.userId),
+          Query.equal('status', 'accepted'),
+        ],
+      );
+
+      final passengerTripIds = acceptedRequests.documents
+          .map((d) => normalizeDocument(d)['trip_id'] as String)
+          .toList();
+
+      final passengerTrips = <Map<String, dynamic>>[];
+      for (final tripId in passengerTripIds) {
+        try {
+          final tripDoc = await databases.getDocument(
+            databaseId: db,
+            collectionId: AppwriteConfig.collectionTrips,
+            documentId: tripId,
+          );
+          passengerTrips.add(normalizeDocument(tripDoc));
+        } catch (_) {}
       }
 
       final allTrips = <Map<String, dynamic>>[
-        ...(driverTrips as List).map((e) => Map<String, dynamic>.from(e)),
+        ...driverTrips,
         ...passengerTrips,
-      ];
+      ].where((t) => t['status'] != 'completed').toList();
 
       allTrips.sort((a, b) {
         final aTime = DateTime.parse(a['departure_time'] as String);
@@ -99,8 +116,8 @@ class _ChatListState extends ConsumerState<_ChatList> {
       }
 
       if (mounted) setState(() => _trips = unique);
-    } catch (_) {
-      // ignore
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString());
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -109,6 +126,36 @@ class _ChatListState extends ConsumerState<_ChatList> {
   @override
   Widget build(BuildContext context) {
     if (_loading) return const Center(child: CircularProgressIndicator());
+
+    if (_error != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.error_outline, color: AppColors.error, size: 48),
+              const SizedBox(height: 12),
+              Text(
+                'No se pudieron cargar las conversaciones',
+                style: AppTextStyles.titleMedium,
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                _error!,
+                style: AppTextStyles.bodySmall.copyWith(
+                  color: AppColors.textSecondary,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              TextButton(onPressed: _loadTrips, child: const Text('Reintentar')),
+            ],
+          ),
+        ),
+      );
+    }
 
     if (_trips.isEmpty) {
       return Center(

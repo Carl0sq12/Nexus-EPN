@@ -1,12 +1,18 @@
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:appwrite/appwrite.dart';
+
+import '../../../../core/config/appwrite_config.dart';
 import '../../../../core/errors/exceptions.dart';
+import '../../../../core/network/appwrite_helpers.dart';
 import '../models/rating_model.dart';
 
-/// Remote datasource for rating operations using Supabase.
+/// Remote datasource for rating operations using Appwrite Databases.
 class RatingRemoteDatasource {
-  final SupabaseClient client;
+  final Databases databases;
 
-  const RatingRemoteDatasource(this.client);
+  const RatingRemoteDatasource(this.databases);
+
+  String get _db => AppwriteConfig.databaseId;
+  String get _col => AppwriteConfig.collectionRatings;
 
   Future<RatingModel> sendRating({
     required String tripId,
@@ -15,19 +21,24 @@ class RatingRemoteDatasource {
     required int score,
     String? comment,
   }) async {
+    if (raterId == ratedUserId) {
+      throw const ServerException('No puedes calificarte a ti mismo.');
+    }
     try {
-      final response = await client
-          .from('ratings')
-          .insert({
-            'trip_id': tripId,
-            'rater_id': raterId,
-            'rated_user_id': ratedUserId,
-            'score': score,
-            if (comment != null) 'comment': comment,
-          })
-          .select()
-          .single();
-      return RatingModel.fromJson(response);
+      final doc = await databases.createDocument(
+        databaseId: _db,
+        collectionId: _col,
+        documentId: ID.unique(),
+        data: {
+          'trip_id': tripId,
+          'rater_id': raterId,
+          'rated_user_id': ratedUserId,
+          'score': score,
+          if (comment != null) 'comment': comment,
+        },
+        permissions: ownerPermissions(raterId),
+      );
+      return RatingModel.fromJson(normalizeDocument(doc));
     } catch (e) {
       throw ServerException(e.toString());
     }
@@ -35,15 +46,57 @@ class RatingRemoteDatasource {
 
   Future<List<RatingModel>> getRatingsForUser(String userId) async {
     try {
-      final response = await client
-          .from('ratings')
-          .select()
-          .eq('rated_user_id', userId)
-          .order('created_at', ascending: false);
-      final list = (response as List)
-          .map((e) => RatingModel.fromJson(Map<String, dynamic>.from(e)))
+      final response = await databases.listDocuments(
+        databaseId: _db,
+        collectionId: _col,
+        queries: [
+          Query.equal('rated_user_id', userId),
+          Query.orderDesc(r'$createdAt'),
+        ],
+      );
+      return response.documents
+          .map((d) => RatingModel.fromJson(normalizeDocument(d)))
           .toList();
-      return list;
+    } catch (e) {
+      throw ServerException(e.toString());
+    }
+  }
+
+  Future<List<RatingModel>> getRatingsForTrip(String tripId) async {
+    try {
+      final response = await databases.listDocuments(
+        databaseId: _db,
+        collectionId: _col,
+        queries: [
+          Query.equal('trip_id', tripId),
+          Query.orderDesc(r'$createdAt'),
+        ],
+      );
+      return response.documents
+          .map((d) => RatingModel.fromJson(normalizeDocument(d)))
+          .toList();
+    } catch (e) {
+      throw ServerException(e.toString());
+    }
+  }
+
+  Future<bool> hasRating({
+    required String tripId,
+    required String raterId,
+    required String ratedUserId,
+  }) async {
+    try {
+      final response = await databases.listDocuments(
+        databaseId: _db,
+        collectionId: _col,
+        queries: [
+          Query.equal('trip_id', tripId),
+          Query.equal('rater_id', raterId),
+          Query.equal('rated_user_id', ratedUserId),
+          Query.limit(1),
+        ],
+      );
+      return response.documents.isNotEmpty;
     } catch (e) {
       throw ServerException(e.toString());
     }

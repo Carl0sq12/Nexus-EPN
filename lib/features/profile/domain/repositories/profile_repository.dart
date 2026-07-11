@@ -11,4 +11,7 @@ abstract class ProfileRepository {
 
   /// Uploads a profile avatar image [file] and returns the public URL.
   Future<String> uploadAvatar(String userId, File file);
+
+  /// Finds a registered user profile by phone number, if any.
+  Future<Profile?> findByPhone(String phone);
 }

@@ -6,7 +6,7 @@ import 'package:local_auth/local_auth.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/constants/app_text_styles.dart';
 import '../../../../core/constants/app_strings.dart';
-import '../../../../core/providers/supabase_provider.dart';
+import '../../../../core/providers/appwrite_provider.dart';
 import '../../../../core/widgets/custom_button.dart';
 import '../../../onboarding/presentation/providers/onboarding_provider.dart';
 import '../../../profile/presentation/providers/profile_provider.dart';
@@ -29,6 +29,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   bool _rememberMe = false;
   bool _isLoadingBiometric = false;
   bool _loadedPreferences = false;
+  bool _obscurePassword = true;
   String _selectedRole = AppStrings.rolePassenger;
 
   static final RegExp _emailRegex = RegExp(
@@ -47,9 +48,9 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     setState(() => _isLoadingBiometric = true);
     try {
       // Business rule: biometric login never uses stored credentials. It only
-      // unlocks an already valid Supabase session persisted by the SDK.
-      final session = ref.read(supabaseClientProvider).auth.currentSession;
-      if (session == null) {
+      // unlocks an already valid Appwrite session persisted by the SDK.
+      final userId = ref.read(currentUserIdProvider);
+      if (userId == null) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('No hay una sesión válida guardada.')),
@@ -79,7 +80,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       );
 
       if (authenticated && mounted) {
-        final roleMatches = await _ensureSelectedRole(session.user.id);
+        final roleMatches = await _ensureSelectedRole(userId);
         if (!roleMatches) return;
         ref.invalidate(onboardingStatusProvider);
         if (!mounted) return;
@@ -129,47 +130,11 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     return false;
   }
 
-  Future<void> _promptBiometricAfterLogin() async {
-    final preferences = ref.read(authPreferencesProvider).asData?.value;
-    if (preferences == null || preferences.biometricPrompted || !mounted) {
-      return;
-    }
-
-    final canUseBiometrics = await _localAuth.canCheckBiometrics;
-    if (!canUseBiometrics || !mounted) {
-      await ref.read(authPreferencesProvider.notifier).markBiometricPrompted();
-      return;
-    }
-
-    final enable = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Activar biometría'),
-        content: const Text(
-          '¿Quieres ingresar con huella o Face ID en este dispositivo?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('No'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Activar'),
-          ),
-        ],
-      ),
-    );
-
-    await ref
-        .read(authPreferencesProvider.notifier)
-        .setBiometricEnabled(enable ?? false);
-  }
-
   InputDecoration _decoration({
     required IconData prefixIcon,
     required String labelText,
     required String hintText,
+    Widget? suffixIcon,
   }) {
     return InputDecoration(
       filled: true,
@@ -183,6 +148,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         borderSide: const BorderSide(color: AppColors.primary, width: 2),
       ),
       prefixIcon: Icon(prefixIcon, color: AppColors.secondary),
+      suffixIcon: suffixIcon,
       labelText: labelText,
       hintText: hintText,
     );
@@ -307,6 +273,8 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                       const SizedBox(height: 20),
                       TextFormField(
                         controller: _emailController,
+                        keyboardType: TextInputType.emailAddress,
+                        autocorrect: false,
                         decoration: _decoration(
                           prefixIcon: Icons.email_outlined,
                           labelText: AppStrings.emailLabel,
@@ -315,7 +283,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                         validator: (v) {
                           if (v == null || v.isEmpty) return 'Campo requerido';
                           if (!_emailRegex.hasMatch(v.trim())) {
-                            return 'Ingresá un correo válido';
+                            return AppStrings.errorEmailInvalid;
                           }
                           return null;
                         },
@@ -323,11 +291,25 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                       const SizedBox(height: 16),
                       TextFormField(
                         controller: _passwordController,
-                        obscureText: true,
+                        obscureText: _obscurePassword,
                         decoration: _decoration(
                           prefixIcon: Icons.lock_outlined,
                           labelText: AppStrings.passwordLabel,
                           hintText: AppStrings.passwordHint,
+                          suffixIcon: IconButton(
+                            tooltip: _obscurePassword
+                                ? 'Mostrar contraseña'
+                                : 'Ocultar contraseña',
+                            icon: Icon(
+                              _obscurePassword
+                                  ? Icons.visibility_outlined
+                                  : Icons.visibility_off_outlined,
+                              color: AppColors.secondary,
+                            ),
+                            onPressed: () => setState(
+                              () => _obscurePassword = !_obscurePassword,
+                            ),
+                          ),
                         ),
                         validator: (v) {
                           if (v == null || v.length < 6) {
@@ -415,7 +397,6 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                                           ? _emailController.text.trim()
                                           : null,
                                     );
-                                await _promptBiometricAfterLogin();
                                 ref.invalidate(onboardingStatusProvider);
                                 if (!context.mounted) return;
                                 context.go(AppStrings.routeSplash);

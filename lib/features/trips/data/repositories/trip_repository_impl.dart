@@ -50,6 +50,7 @@ class TripRepositoryImpl implements TripRepository {
     double? destinationLongitude,
     double? routeDistanceMeters,
     double? routeDurationSeconds,
+    String? routePoints,
   }) async {
     try {
       return await datasource.createTrip(
@@ -65,6 +66,7 @@ class TripRepositoryImpl implements TripRepository {
         destinationLongitude: destinationLongitude,
         routeDistanceMeters: routeDistanceMeters,
         routeDurationSeconds: routeDurationSeconds,
+        routePoints: routePoints,
       );
     } catch (e) {
       throw ServerFailure(e.toString());

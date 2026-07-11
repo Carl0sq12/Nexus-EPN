@@ -1,6 +1,7 @@
 import '../../domain/entities/trip_request.dart';
+import '../../../../core/network/appwrite_helpers.dart';
 
-/// Data model for [TripRequest] with JSON serialization using Supabase snake_case keys.
+/// Data model for [TripRequest] with JSON serialization (Appwrite / snake_case).
 class TripRequestModel extends TripRequest {
   const TripRequestModel({
     required String id,
@@ -37,8 +38,10 @@ class TripRequestModel extends TripRequest {
        );
 
   factory TripRequestModel.fromJson(Map<String, dynamic> json) {
+    final id = (json['id'] ?? json[r'$id']) as String;
+    final createdRaw = json['created_at'] ?? json[r'$createdAt'];
     return TripRequestModel(
-      id: json['id'] as String,
+      id: id,
       tripId: json['trip_id'] as String,
       passengerId: json['passenger_id'] as String,
       status: json['status'] as String? ?? 'pending',
@@ -52,7 +55,7 @@ class TripRequestModel extends TripRequest {
       stops: _parseStops(json['request_stops']),
       proposedPrice: (json['proposed_price'] as num?)?.toDouble(),
       priceNote: json['price_note'] as String?,
-      createdAt: DateTime.parse(json['created_at'] as String),
+      createdAt: DateTime.parse(createdRaw as String),
     );
   }
 
@@ -85,11 +88,9 @@ class TripRequestModel extends TripRequest {
 }
 
 List<TripRequestStop> _parseStops(dynamic rawStops) {
-  if (rawStops is! List) return const [];
-  return rawStops
-      .whereType<Map>()
-      .map((rawStop) {
-        final stop = Map<String, dynamic>.from(rawStop);
+  final parsed = parseStops(rawStops);
+  return parsed
+      .map((stop) {
         final latitude = (stop['latitude'] as num?)?.toDouble();
         final longitude = (stop['longitude'] as num?)?.toDouble();
         if (latitude == null || longitude == null) return null;

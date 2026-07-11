@@ -40,4 +40,9 @@ class AuthRepositoryImpl implements AuthRepository {
   Future<void> resetPassword(String email) async {
     return remote.resetPassword(email);
   }
+
+  @override
+  Future<void> resendVerification() {
+    return remote.resendVerification();
+  }
 }

@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -8,14 +10,21 @@ import '../../../../core/constants/app_strings.dart';
 import '../providers/map_provider.dart';
 
 /// Map page showing the user's current location with OpenStreetMap tiles.
-class MapPage extends ConsumerWidget {
+class MapPage extends ConsumerStatefulWidget {
   const MapPage({super.key});
 
   static const _epnLocation = LatLng(-0.2106, -78.4889);
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final locationAsync = ref.watch(currentLocationProvider);
+  ConsumerState<MapPage> createState() => _MapPageState();
+}
+
+class _MapPageState extends ConsumerState<MapPage> {
+  final MapController _mapController = MapController();
+
+  @override
+  Widget build(BuildContext context) {
+    final locationAsync = ref.watch(currentLocationStreamProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -42,6 +51,8 @@ class MapPage extends ConsumerWidget {
           return _MapContent(
             center: center,
             markerIcon: Icons.navigation,
+            heading: _normalizedHeading(location.heading),
+            mapController: _mapController,
             title: AppStrings.mapTitle,
             subtitle:
                 '${location.latitude.toStringAsFixed(4)}, ${location.longitude.toStringAsFixed(4)}',
@@ -60,6 +71,7 @@ class _MapFallback extends StatelessWidget {
     return const _MapContent(
       center: MapPage._epnLocation,
       markerIcon: Icons.school_outlined,
+      heading: 0,
       title: 'Campus EPN',
       subtitle: 'Activa la ubicación para ver tu posición actual.',
     );
@@ -69,12 +81,16 @@ class _MapFallback extends StatelessWidget {
 class _MapContent extends StatelessWidget {
   final LatLng center;
   final IconData markerIcon;
+  final double heading;
+  final MapController? mapController;
   final String title;
   final String subtitle;
 
   const _MapContent({
     required this.center,
     required this.markerIcon,
+    required this.heading,
+    this.mapController,
     required this.title,
     required this.subtitle,
   });
@@ -84,6 +100,7 @@ class _MapContent extends StatelessWidget {
     return Stack(
       children: [
         FlutterMap(
+          mapController: mapController,
           options: MapOptions(initialCenter: center, initialZoom: 15.0),
           children: [
             TileLayer(
@@ -108,7 +125,10 @@ class _MapContent extends StatelessWidget {
                         ),
                       ],
                     ),
-                    child: Icon(markerIcon, size: 28, color: Colors.white),
+                    child: Transform.rotate(
+                      angle: heading * math.pi / 180,
+                      child: Icon(markerIcon, size: 28, color: Colors.white),
+                    ),
                   ),
                 ),
               ],
@@ -116,12 +136,19 @@ class _MapContent extends StatelessWidget {
           ],
         ),
         Positioned(
+          top: 16,
+          right: 16,
+          child: _MapHeadingIndicator(heading: heading),
+        ),
+        Positioned(
           right: 16,
           bottom: 160,
           child: FloatingActionButton.small(
             heroTag: 'center_location',
             backgroundColor: AppColors.surface,
-            onPressed: () {},
+            onPressed: mapController == null
+                ? null
+                : () => mapController!.move(center, 15),
             child: const Icon(Icons.my_location, color: AppColors.primary),
           ),
         ),
@@ -180,4 +207,44 @@ class _MapContent extends StatelessWidget {
       ],
     );
   }
+}
+
+class _MapHeadingIndicator extends StatelessWidget {
+  final double heading;
+
+  const _MapHeadingIndicator({required this.heading});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: const [
+          BoxShadow(color: Color.fromRGBO(13, 111, 148, 0.12), blurRadius: 8),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Transform.rotate(
+            angle: heading * math.pi / 180,
+            child: const Icon(
+              Icons.navigation,
+              size: 18,
+              color: AppColors.primary,
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text('${heading.round()}°', style: AppTextStyles.bodySmall),
+        ],
+      ),
+    );
+  }
+}
+
+double _normalizedHeading(double heading) {
+  if (!heading.isFinite || heading < 0) return 0;
+  return heading % 360;
 }

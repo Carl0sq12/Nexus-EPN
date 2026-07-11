@@ -19,4 +19,7 @@ abstract class AuthRepository {
 
   /// Envía una solicitud de restablecimiento de contraseña para el correo.
   Future<void> resetPassword(String email);
+
+  /// Reenvía el correo de verificación al usuario con sesión activa.
+  Future<void> resendVerification();
 }

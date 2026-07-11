@@ -19,7 +19,7 @@ class AuthException implements Exception {
   final String message;
   const AuthException([this.message = '']);
   @override
-  String toString() => 'AuthException: $message';
+  String toString() => message.isEmpty ? 'AuthException' : message;
 }
 
 /// Excepción lanzada al fallar operaciones de caché/local storage.

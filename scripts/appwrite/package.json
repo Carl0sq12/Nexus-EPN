@@ -1,0 +1,15 @@
+{
+  "name": "nexus-campus-appwrite-setup",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Crea database, collections, indexes y buckets de Nexus Campus en Appwrite",
+  "scripts": {
+    "setup": "node setup.mjs",
+    "setup:auth-check": "node setup.mjs --auth-check"
+  },
+  "dependencies": {
+    "node-appwrite": "^14.1.0",
+    "dotenv": "^16.4.7"
+  }
+}

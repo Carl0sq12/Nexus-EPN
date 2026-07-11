@@ -78,4 +78,7 @@ class _RecordingAuthRepository implements AuthRepository {
 
   @override
   Future<void> resetPassword(String email) async {}
+
+  @override
+  Future<void> resendVerification() async {}
 }

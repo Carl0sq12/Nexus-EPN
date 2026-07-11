@@ -62,6 +62,7 @@ pubspec.lock
 
 # Secrets
 .env
+scripts/appwrite/.env
 
 # Misc
 *.log

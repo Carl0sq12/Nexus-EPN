@@ -1,4 +1,6 @@
 import '../../domain/entities/trip.dart';
+import '../../../../core/utils/geo_fare.dart';
+import 'package:latlong2/latlong.dart';
 
 /// Data model for [Trip] with JSON serialization using Supabase snake_case keys.
 class TripModel extends Trip {
@@ -18,6 +20,7 @@ class TripModel extends Trip {
     double? destinationLongitude,
     double? routeDistanceMeters,
     double? routeDurationSeconds,
+    List<LatLng>? routePoints,
   }) : super(
          id: id,
          driverId: driverId,
@@ -34,11 +37,12 @@ class TripModel extends Trip {
          destinationLongitude: destinationLongitude,
          routeDistanceMeters: routeDistanceMeters,
          routeDurationSeconds: routeDurationSeconds,
+         routePoints: routePoints,
        );
 
   factory TripModel.fromJson(Map<String, dynamic> json) {
     return TripModel(
-      id: json['id'] as String,
+      id: (json['id'] ?? json[r'$id']) as String,
       driverId: json['driver_id'] as String,
       origin: json['origin'] as String? ?? '',
       destination: json['destination'] as String? ?? '',
@@ -54,6 +58,9 @@ class TripModel extends Trip {
       routeDistanceMeters: (json['route_distance_meters'] as num?)?.toDouble(),
       routeDurationSeconds: (json['route_duration_seconds'] as num?)
           ?.toDouble(),
+      routePoints: json['route_points'] is String
+          ? RouteGeometry.decodePoints(json['route_points'] as String)
+          : null,
     );
   }
 
@@ -73,6 +80,8 @@ class TripModel extends Trip {
       'destination_longitude': destinationLongitude,
       'route_distance_meters': routeDistanceMeters,
       'route_duration_seconds': routeDurationSeconds,
+      if (routePoints != null)
+        'route_points': RouteGeometry.encodePoints(routePoints!),
     };
   }
 }

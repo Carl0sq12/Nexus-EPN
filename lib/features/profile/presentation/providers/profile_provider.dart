@@ -1,5 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../../core/providers/supabase_provider.dart';
+import '../../../../core/providers/appwrite_provider.dart';
 import '../../../../core/providers/session_data_provider.dart';
 import '../../domain/entities/profile.dart';
 import '../../domain/usecases/get_profile_usecase.dart';
@@ -9,7 +9,10 @@ import '../../data/repositories/profile_repository_impl.dart';
 
 /// Provider for the profile remote datasource.
 final profileDatasourceProvider = Provider<ProfileRemoteDatasource>((ref) {
-  return ProfileRemoteDatasource(ref.watch(supabaseClientProvider));
+  return ProfileRemoteDatasource(
+    ref.watch(databasesProvider),
+    ref.watch(storageProvider),
+  );
 });
 
 /// Provider for the profile repository.
@@ -39,10 +42,13 @@ class ProfileNotifier extends StateNotifier<AsyncValue<void>> {
   ProfileNotifier(this.ref) : super(const AsyncValue.data(null));
 
   Future<void> updateProfile(
-    String userId,
+    String userId, {
     String? fullName,
     String? avatarUrl,
-  ) async {
+    String? phone,
+    String? cedula,
+    String? role,
+  }) async {
     state = const AsyncValue.loading();
     try {
       await ref.read(updateProfileUseCaseProvider)(
@@ -50,6 +56,9 @@ class ProfileNotifier extends StateNotifier<AsyncValue<void>> {
           userId: userId,
           fullName: fullName,
           avatarUrl: avatarUrl,
+          phone: phone,
+          cedula: cedula,
+          role: role,
         ),
       );
       ref.invalidate(profileProvider(userId));

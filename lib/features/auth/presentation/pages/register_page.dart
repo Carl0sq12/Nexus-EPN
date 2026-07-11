@@ -24,6 +24,8 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
   String _role = AppStrings.rolePassenger;
+  bool _obscurePassword = true;
+  bool _obscureConfirmPassword = true;
 
   static final RegExp _emailRegex = RegExp(
     r'^[\w.+-]+@epn\.edu\.ec$',
@@ -43,6 +45,7 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
     required IconData prefixIcon,
     required String labelText,
     required String hintText,
+    Widget? suffixIcon,
   }) {
     return InputDecoration(
       filled: true,
@@ -56,6 +59,7 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
         borderSide: const BorderSide(color: AppColors.primary, width: 2),
       ),
       prefixIcon: Icon(prefixIcon, color: AppColors.secondary),
+      suffixIcon: suffixIcon,
       labelText: labelText,
       hintText: hintText,
     );
@@ -124,7 +128,7 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
                 const Text('Crear cuenta', style: AppTextStyles.displayLarge),
                 const SizedBox(height: 4),
                 const Text(
-                  'Regístrate con tu correo',
+                  'Solo correos institucionales @epn.edu.ec',
                   style: AppTextStyles.bodySmall,
                 ),
                 const SizedBox(height: 24),
@@ -145,6 +149,8 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
                 const SizedBox(height: 16),
                 TextFormField(
                   controller: _emailController,
+                  keyboardType: TextInputType.emailAddress,
+                  autocorrect: false,
                   decoration: _decoration(
                     prefixIcon: Icons.email_outlined,
                     labelText: AppStrings.emailLabel,
@@ -153,7 +159,7 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
                   validator: (v) {
                     if (v == null || v.trim().isEmpty) return 'Campo requerido';
                     if (!_emailRegex.hasMatch(v.trim())) {
-                      return 'Correo inválido';
+                      return AppStrings.errorEmailInvalid;
                     }
                     return null;
                   },
@@ -161,11 +167,25 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
                 const SizedBox(height: 16),
                 TextFormField(
                   controller: _passwordController,
-                  obscureText: true,
+                  obscureText: _obscurePassword,
                   decoration: _decoration(
                     prefixIcon: Icons.lock_outlined,
                     labelText: AppStrings.passwordLabel,
                     hintText: AppStrings.passwordHint,
+                    suffixIcon: IconButton(
+                      tooltip: _obscurePassword
+                          ? 'Mostrar contraseña'
+                          : 'Ocultar contraseña',
+                      icon: Icon(
+                        _obscurePassword
+                            ? Icons.visibility_outlined
+                            : Icons.visibility_off_outlined,
+                        color: AppColors.secondary,
+                      ),
+                      onPressed: () => setState(
+                        () => _obscurePassword = !_obscurePassword,
+                      ),
+                    ),
                   ),
                   validator: (v) {
                     if (v == null || v.length < 6) {
@@ -177,11 +197,26 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
                 const SizedBox(height: 16),
                 TextFormField(
                   controller: _confirmPasswordController,
-                  obscureText: true,
+                  obscureText: _obscureConfirmPassword,
                   decoration: _decoration(
                     prefixIcon: Icons.lock_outlined,
                     labelText: 'Confirmar contraseña',
                     hintText: 'Repite la contraseña',
+                    suffixIcon: IconButton(
+                      tooltip: _obscureConfirmPassword
+                          ? 'Mostrar contraseña'
+                          : 'Ocultar contraseña',
+                      icon: Icon(
+                        _obscureConfirmPassword
+                            ? Icons.visibility_outlined
+                            : Icons.visibility_off_outlined,
+                        color: AppColors.secondary,
+                      ),
+                      onPressed: () => setState(
+                        () =>
+                            _obscureConfirmPassword = !_obscureConfirmPassword,
+                      ),
+                    ),
                   ),
                   validator: (v) {
                     if (v != _passwordController.text) {
@@ -201,7 +236,7 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
                           final user = await ref
                               .read(authProvider.notifier)
                               .signUp(
-                                _emailController.text.trim(),
+                                _emailController.text.trim().toLowerCase(),
                                 _passwordController.text,
                                 _role,
                                 _fullNameController.text.trim().isEmpty

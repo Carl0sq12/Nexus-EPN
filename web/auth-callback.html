@@ -3,35 +3,38 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Nexus Campus - Confirmación</title>
+  <title>Nexus Campus - Confirmacion</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <div class="container">
     <div class="card">
       <div id="loadingState">
-        <div class="icon loading">⏳</div>
+        <div class="icon loading">...</div>
         <h1>Confirmando...</h1>
         <p class="subtitle">Un momento por favor</p>
       </div>
       <div id="successState" style="display:none;">
-        <div class="icon success">✓</div>
-        <h1>¡Correo verificado!</h1>
-        <p class="subtitle">Tu cuenta fue confirmada correctamente. Ya podés volver a la app e iniciar sesión.</p>
+        <div class="icon success">OK</div>
+        <h1>Correo verificado</h1>
+        <p class="subtitle">Tu cuenta fue confirmada. Ya puedes volver a la app e iniciar sesion.</p>
         <button id="backToAppBtn">Volver a la app</button>
       </div>
       <div id="errorState" style="display:none;">
-        <div class="icon error">✕</div>
+        <div class="icon error">X</div>
         <h1>No se pudo confirmar</h1>
-        <p class="subtitle" id="errorDetail">El enlace es inválido o ya expiró. Probá registrarte de nuevo o pedí un nuevo enlace desde la app.</p>
+        <p class="subtitle" id="errorDetail">El enlace es invalido o ya expiro. Pide un nuevo enlace desde la app.</p>
       </div>
     </div>
   </div>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/appwrite@16"></script>
   <script src="config.js"></script>
   <script>
-    const { url, anonKey, appDeepLink } = window.SUPABASE_CONFIG;
-    const supabaseClient = supabase.createClient(url, anonKey);
+    const { endpoint, projectId, appDeepLink } = window.APPWRITE_CONFIG;
+    const { Client, Account } = Appwrite;
+    const client = new Client().setEndpoint(endpoint).setProject(projectId);
+    const account = new Account(client);
+
     const loadingState = document.getElementById('loadingState');
     const successState = document.getElementById('successState');
     const errorState = document.getElementById('errorState');
@@ -43,47 +46,23 @@
     }
 
     (async () => {
-      const hash = window.location.hash;
-      const queryParams = new URLSearchParams(window.location.search);
-      const code = queryParams.get('code');
+      const params = new URLSearchParams(window.location.search);
+      const userId = params.get('userId');
+      const secret = params.get('secret');
 
-      // Caso 1: error explícito en el hash (flujo implícito viejo)
-      if (hash.includes('error')) {
-        const params = new URLSearchParams(hash.substring(1));
-        errorDetail.textContent = params.get('error_description') || errorDetail.textContent;
+      if (!userId || !secret) {
+        errorDetail.textContent = 'Faltan userId o secret en el enlace.';
         showState(errorState);
         return;
       }
 
-      // Caso 2: flujo PKCE -> Supabase manda ?code=xxxx en la query string
-      if (code) {
-        const { error } = await supabaseClient.auth.exchangeCodeForSession(code);
-        if (error) {
-          errorDetail.textContent = error.message;
-          showState(errorState);
-        } else {
-          showState(successState);
-        }
-        return;
-      }
-
-      // Caso 3: ya hay sesión activa (por si el SDK ya la procesó solo)
-      const { data } = await supabaseClient.auth.getSession();
-      if (data.session) {
+      try {
+        await account.updateVerification(userId, secret);
         showState(successState);
-        return;
+      } catch (e) {
+        errorDetail.textContent = e.message || errorDetail.textContent;
+        showState(errorState);
       }
-
-      // Caso 4: flujo implícito viejo con access_token en el hash
-      if (hash.includes('access_token')) {
-        setTimeout(async () => {
-          const retry = await supabaseClient.auth.getSession();
-          showState(retry.data.session ? successState : errorState);
-        }, 1500);
-        return;
-      }
-
-      showState(errorState);
     })();
 
     document.getElementById('backToAppBtn').addEventListener('click', () => {

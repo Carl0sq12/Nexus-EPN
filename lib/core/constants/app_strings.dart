@@ -10,8 +10,14 @@ class AppStrings {
   static const String routeVerifyEmail = '/onboarding/verify-email';
   static const String routeOnboardingProfile = '/onboarding/profile';
   static const String routeOnboardingVehicle = '/onboarding/vehicle';
+  static const String routeOnboardingVehiclePending =
+      '/onboarding/vehicle-pending';
   static const String routeOnboardingContacts = '/onboarding/contacts';
+  static const String routeNotifications = '/notifications';
+  static const String routeSecurity = '/security';
+  static const String routePassengerHistory = '/trips/history';
   static const String routeTrips = '/trips';
+  static const String routeTripsSearch = '/trips/search';
   static const String routeTripsNew = '/trips/new';
   static const String routeMyTrips = '/trips/my';
   static const String routeMap = '/map';

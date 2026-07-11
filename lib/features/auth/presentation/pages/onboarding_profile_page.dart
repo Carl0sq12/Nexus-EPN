@@ -5,7 +5,8 @@ import 'package:go_router/go_router.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/constants/app_strings.dart';
 import '../../../../core/constants/app_text_styles.dart';
-import '../../../../core/providers/supabase_provider.dart';
+import '../../../../core/providers/appwrite_provider.dart';
+import '../../../../core/widgets/app_state_views.dart';
 import '../../../../core/widgets/custom_button.dart';
 import '../../../onboarding/presentation/providers/onboarding_provider.dart';
 import '../../../profile/presentation/providers/profile_provider.dart';
@@ -32,10 +33,12 @@ class _OnboardingProfilePageState extends ConsumerState<OnboardingProfilePage> {
 
   @override
   Widget build(BuildContext context) {
-    final userId = ref.watch(authStateProvider).value?.session?.user.id;
+    final userId = ref.watch(currentUserIdProvider);
     final notifierState = ref.watch(profileNotifierProvider);
 
-    if (userId == null) return const Scaffold(body: SizedBox.shrink());
+    if (userId == null) {
+      return const Scaffold(body: AppLoadingView(message: 'Cargando sesión...'));
+    }
 
     final profileAsync = ref.watch(profileProvider(userId));
     final profile = profileAsync.asData?.value;
@@ -86,8 +89,8 @@ class _OnboardingProfilePageState extends ConsumerState<OnboardingProfilePage> {
                       .read(profileNotifierProvider.notifier)
                       .updateProfile(
                         userId,
-                        _fullNameController.text.trim(),
-                        profile?.avatarUrl,
+                        fullName: _fullNameController.text.trim(),
+                        avatarUrl: profile?.avatarUrl,
                       );
                   ref.invalidate(onboardingStatusProvider);
                   if (context.mounted) context.go(AppStrings.routeSplash);

@@ -32,4 +32,19 @@ class EmergencyContactsRepository
   Future<void> deleteContact(String contactId) async {
     return datasource.deleteContact(contactId);
   }
+
+  @override
+  Future<EmergencyContact> updateContact({
+    required String contactId,
+    required String name,
+    required String phone,
+    String? relationship,
+  }) {
+    return datasource.updateContact(
+      contactId: contactId,
+      name: name,
+      phone: phone,
+      relationship: relationship,
+    );
+  }
 }

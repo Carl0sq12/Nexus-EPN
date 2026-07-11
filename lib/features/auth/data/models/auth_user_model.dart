@@ -1,7 +1,7 @@
 import '../../domain/entities/auth_user.dart';
 
 /// Modelo de datos para `AuthUser` con serialización desde/hacia JSON
-/// usando las columnas de Supabase en snake_case.
+/// usando columnas snake_case (Appwrite documents).
 class AuthUserModel extends AuthUser {
   const AuthUserModel({
     required String id,
@@ -20,14 +20,15 @@ class AuthUserModel extends AuthUser {
        );
 
   factory AuthUserModel.fromJson(Map<String, dynamic> json) {
+    final createdRaw = json['created_at'] ?? json[r'$createdAt'];
     return AuthUserModel(
-      id: json['id'] as String,
-      email: json['email'] as String,
+      id: (json['id'] ?? json[r'$id']) as String,
+      email: json['email'] as String? ?? '',
       fullName: json['full_name'] as String?,
       role: json['role'] as String? ?? 'passenger',
       avatarUrl: json['avatar_url'] as String?,
-      createdAt: json['created_at'] != null
-          ? DateTime.tryParse(json['created_at'] as String)
+      createdAt: createdRaw != null
+          ? DateTime.tryParse(createdRaw as String)
           : null,
     );
   }

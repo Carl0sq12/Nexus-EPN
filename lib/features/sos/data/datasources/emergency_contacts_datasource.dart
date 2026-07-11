@@ -1,23 +1,30 @@
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:appwrite/appwrite.dart';
+
+import '../../../../core/config/appwrite_config.dart';
 import '../../../../core/errors/exceptions.dart';
+import '../../../../core/network/appwrite_helpers.dart';
 import '../models/emergency_contact_model.dart';
 
 class EmergencyContactsDatasource {
-  final SupabaseClient client;
+  final Databases databases;
 
-  const EmergencyContactsDatasource(this.client);
+  const EmergencyContactsDatasource(this.databases);
+
+  String get _db => AppwriteConfig.databaseId;
+  String get _col => AppwriteConfig.collectionEmergencyContacts;
 
   Future<List<EmergencyContactModel>> getContacts(String userId) async {
     try {
-      final response = await client
-          .from('emergency_contacts')
-          .select()
-          .eq('user_id', userId)
-          .order('created_at');
-      return (response as List)
-          .map(
-            (e) => EmergencyContactModel.fromJson(Map<String, dynamic>.from(e)),
-          )
+      final response = await databases.listDocuments(
+        databaseId: _db,
+        collectionId: _col,
+        queries: [
+          Query.equal('user_id', userId),
+          Query.orderAsc(r'$createdAt'),
+        ],
+      );
+      return response.documents
+          .map((d) => EmergencyContactModel.fromJson(normalizeDocument(d)))
           .toList();
     } catch (e) {
       throw ServerException(e.toString());
@@ -31,17 +38,19 @@ class EmergencyContactsDatasource {
     String? relationship,
   }) async {
     try {
-      final response = await client
-          .from('emergency_contacts')
-          .insert({
-            'user_id': userId,
-            'name': name,
-            'phone': phone,
-            'relationship': relationship,
-          })
-          .select()
-          .single();
-      return EmergencyContactModel.fromJson(response);
+      final doc = await databases.createDocument(
+        databaseId: _db,
+        collectionId: _col,
+        documentId: ID.unique(),
+        data: {
+          'user_id': userId,
+          'name': name,
+          'phone': phone,
+          if (relationship != null) 'relationship': relationship,
+        },
+        permissions: ownerPermissions(userId),
+      );
+      return EmergencyContactModel.fromJson(normalizeDocument(doc));
     } catch (e) {
       throw ServerException(e.toString());
     }
@@ -49,7 +58,30 @@ class EmergencyContactsDatasource {
 
   Future<void> deleteContact(String contactId) async {
     try {
-      await client.from('emergency_contacts').delete().eq('id', contactId);
+      await databases.deleteDocument(
+        databaseId: _db,
+        collectionId: _col,
+        documentId: contactId,
+      );
+    } catch (e) {
+      throw ServerException(e.toString());
+    }
+  }
+
+  Future<EmergencyContactModel> updateContact({
+    required String contactId,
+    required String name,
+    required String phone,
+    String? relationship,
+  }) async {
+    try {
+      final doc = await databases.updateDocument(
+        databaseId: _db,
+        collectionId: _col,
+        documentId: contactId,
+        data: {'name': name, 'phone': phone, 'relationship': relationship},
+      );
+      return EmergencyContactModel.fromJson(normalizeDocument(doc));
     } catch (e) {
       throw ServerException(e.toString());
     }

@@ -21,7 +21,7 @@ dependencies:
   image_picker: ^1.2.3
   equatable: ^2.0.5
   intl: ^0.19.0
-  supabase_flutter: ^2.3.0
+  appwrite: ^17.1.0
   flutter_dotenv: ^5.1.0
   permission_handler: ^12.0.3
   local_auth: ^3.0.1
@@ -29,6 +29,8 @@ dependencies:
   url_launcher: ^6.3.1
   # Used directly to request OSRM route estimates for map origin/destination.
   http: ^1.5.0
+  image: ^4.8.0
+  flutter_local_notifications: ^22.0.1
 
 dev_dependencies:
   flutter_test:
@@ -36,10 +38,13 @@ dev_dependencies:
 
   flutter_lints: ^6.0.0
 
+dependency_overrides:
+  # appwrite pide <10; geolocator_linux pide ^10. Override para resolver.
+  package_info_plus: ^8.3.0
+
 flutter:
   uses-material-design: true
 
   assets:
     - assets/images/
-    - .env
-    - .env
+    - assets/env/appwrite.env

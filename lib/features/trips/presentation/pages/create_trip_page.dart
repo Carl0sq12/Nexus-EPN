@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,16 +10,20 @@ import 'package:latlong2/latlong.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/constants/app_text_styles.dart';
 
-import '../../../../core/providers/supabase_provider.dart';
+import '../../../../core/providers/appwrite_provider.dart';
+import '../../../../core/utils/geo_fare.dart';
 import '../../../../core/widgets/custom_button.dart';
 import '../../../map/domain/entities/route_info.dart';
 import '../../../map/domain/entities/user_location.dart';
 import '../../../map/presentation/providers/map_provider.dart';
+import '../../../vehicles/presentation/providers/vehicle_provider.dart';
 import '../providers/trip_provider.dart';
 
-/// Page for creating a new trip with Coastal Wave form design.
+/// Page for creating or editing a trip with Coastal Wave form design.
 class CreateTripPage extends ConsumerStatefulWidget {
-  const CreateTripPage({super.key});
+  final String? editTripId;
+
+  const CreateTripPage({this.editTripId, super.key});
 
   @override
   ConsumerState<CreateTripPage> createState() => _CreateTripPageState();
@@ -34,18 +40,194 @@ class _CreateTripPageState extends ConsumerState<CreateTripPage> {
   int _seats = 3;
   bool _selectingOrigin = true;
   bool _isLoadingRoute = false;
+  bool _isLoadingEdit = false;
   LatLng? _originPoint;
   LatLng? _destinationPoint;
   RouteInfo? _routeInfo;
   String? _routeError;
+  Timer? _destinationDebounce;
+  List<PlaceSuggestion> _destinationSuggestions = const [];
+  bool _isSearchingDestination = false;
+  int _destinationSearchGeneration = 0;
+
+  bool get _isEditing => widget.editTripId != null;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_isEditing) {
+      _loadTripForEdit();
+    } else {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _useCurrentLocation();
+      });
+    }
+  }
+
+  Future<void> _useCurrentLocation({bool refresh = false}) async {
+    if (refresh) {
+      ref.invalidate(currentLocationProvider);
+    }
+    try {
+      final location = await ref.read(currentLocationProvider.future);
+      if (!mounted) return;
+      final point = LatLng(location.latitude, location.longitude);
+      setState(() {
+        _originPoint = point;
+        _originController.text = 'Buscando dirección...';
+        _selectingOrigin = false;
+        _routeInfo = null;
+        _routeError = null;
+        _priceController.clear();
+      });
+      await _loadPointLabel(point, selectingOrigin: true);
+      if (_destinationPoint != null) await _loadRoute();
+    } catch (e) {
+      if (!mounted || !refresh) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo actualizar la ubicación: $e')),
+      );
+    }
+  }
+
+  Future<void> _loadTripForEdit() async {
+    final tripId = widget.editTripId;
+    if (tripId == null) return;
+    setState(() => _isLoadingEdit = true);
+    try {
+      final trip = await ref.read(tripByIdProvider(tripId).future);
+      if (!mounted) return;
+      setState(() {
+        _originController.text = trip.origin;
+        _destinationController.text = trip.destination;
+        _priceController.text = trip.pricePerSeat.toStringAsFixed(2);
+        _seats = trip.totalSeats;
+        _selectedDate = DateTime(
+          trip.departureTime.year,
+          trip.departureTime.month,
+          trip.departureTime.day,
+        );
+        _selectedTime = TimeOfDay(
+          hour: trip.departureTime.hour,
+          minute: trip.departureTime.minute,
+        );
+        if (trip.originLatitude != null && trip.originLongitude != null) {
+          _originPoint = LatLng(trip.originLatitude!, trip.originLongitude!);
+        }
+        if (trip.destinationLatitude != null &&
+            trip.destinationLongitude != null) {
+          _destinationPoint = LatLng(
+            trip.destinationLatitude!,
+            trip.destinationLongitude!,
+          );
+        }
+        if (trip.routeDistanceMeters != null ||
+            trip.routeDurationSeconds != null ||
+            trip.routePoints?.isNotEmpty == true) {
+          _routeInfo = RouteInfo(
+            points: trip.routePoints?.isNotEmpty == true
+                ? trip.routePoints!
+                : [?_originPoint, ?_destinationPoint],
+            distanceMeters: trip.routeDistanceMeters ?? 0,
+            durationSeconds: trip.routeDurationSeconds ?? 0,
+          );
+        }
+      });
+      if (_originPoint != null && _destinationPoint != null) {
+        await _loadRoute();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('No se pudo cargar el viaje: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoadingEdit = false);
+    }
+  }
 
   @override
   void dispose() {
+    _destinationDebounce?.cancel();
     _originController.dispose();
     _destinationController.dispose();
     _commentController.dispose();
     _priceController.dispose();
     super.dispose();
+  }
+
+  void _onDestinationChanged(String value) {
+    _destinationDebounce?.cancel();
+    final generation = ++_destinationSearchGeneration;
+    setState(() {
+      _destinationPoint = null;
+      _destinationSuggestions = const [];
+      _isSearchingDestination = false;
+      _routeInfo = null;
+      _routeError = null;
+      _priceController.clear();
+    });
+    if (value.trim().length < 3) return;
+
+    _destinationDebounce = Timer(const Duration(milliseconds: 400), () async {
+      if (!mounted || generation != _destinationSearchGeneration) return;
+      setState(() => _isSearchingDestination = true);
+      try {
+        final results = await GeocodingService.search(value);
+        if (!mounted || generation != _destinationSearchGeneration) return;
+        setState(() => _destinationSuggestions = results);
+      } catch (_) {
+        if (mounted && generation == _destinationSearchGeneration) {
+          setState(() => _destinationSuggestions = const []);
+        }
+      } finally {
+        if (mounted && generation == _destinationSearchGeneration) {
+          setState(() => _isSearchingDestination = false);
+        }
+      }
+    });
+  }
+
+  Future<void> _selectDestination(PlaceSuggestion suggestion) async {
+    _destinationDebounce?.cancel();
+    _destinationSearchGeneration++;
+    setState(() {
+      _destinationController.text = suggestion.displayName;
+      _destinationPoint = suggestion.point;
+      _destinationSuggestions = const [];
+      _isSearchingDestination = false;
+      _selectingOrigin = false;
+      _routeInfo = null;
+      _routeError = null;
+      _priceController.clear();
+    });
+    if (_originPoint != null) await _loadRoute();
+  }
+
+  void _updateFare() {
+    final route = _routeInfo;
+    if (route == null || route.distanceMeters <= 0) {
+      _priceController.clear();
+      return;
+    }
+    final price = TripFareCalculator.pricePerSeat(
+      distanceMeters: route.distanceMeters,
+      seats: _seats,
+    );
+    _priceController.text = price.toStringAsFixed(2);
+  }
+
+  String? get _fareHint {
+    final route = _routeInfo;
+    if (route == null || route.distanceMeters <= 0) return null;
+    final total = TripFareCalculator.totalFareFromMeters(route.distanceMeters);
+    final perSeat = TripFareCalculator.pricePerSeat(
+      distanceMeters: route.distanceMeters,
+      seats: _seats,
+    );
+    return 'Tarifa estimada: \$${total.toStringAsFixed(2)} · '
+        '\$${perSeat.toStringAsFixed(2)} por asiento';
   }
 
   Future<void> _pickDate() async {
@@ -113,6 +295,7 @@ class _CreateTripPageState extends ConsumerState<CreateTripPage> {
       }
       _routeInfo = null;
       _routeError = null;
+      _priceController.clear();
     });
 
     await _loadPointLabel(point, selectingOrigin: selectingOrigin);
@@ -171,6 +354,7 @@ class _CreateTripPageState extends ConsumerState<CreateTripPage> {
       );
       if (!mounted) return;
       setState(() => _routeInfo = route);
+      _updateFare();
     } catch (e) {
       if (!mounted) return;
       setState(() => _routeError = e.toString());
@@ -184,7 +368,7 @@ class _CreateTripPageState extends ConsumerState<CreateTripPage> {
   @override
   Widget build(BuildContext context) {
     final authState = ref.watch(authStateProvider);
-    final userId = authState.value?.session?.user.id;
+    final userId = authState.value?.userId;
     final notifierState = ref.watch(tripNotifierProvider);
     final locationAsync = ref.watch(currentLocationProvider);
 
@@ -193,10 +377,25 @@ class _CreateTripPageState extends ConsumerState<CreateTripPage> {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text(next.error.toString())));
-      } else if (next is AsyncData && mounted) {
+      } else if (next is AsyncData && previous is AsyncLoading && mounted) {
         context.pop();
       }
     });
+
+    if (_isLoadingEdit) {
+      return Scaffold(
+        appBar: AppBar(
+          title: Text(_isEditing ? 'Editar viaje' : 'Publicar viaje'),
+          flexibleSpace: Container(
+            decoration: const BoxDecoration(
+              gradient: AppColors.primaryGradient,
+            ),
+          ),
+          foregroundColor: Colors.white,
+        ),
+        body: const Center(child: CircularProgressIndicator()),
+      );
+    }
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -205,7 +404,7 @@ class _CreateTripPageState extends ConsumerState<CreateTripPage> {
           icon: const Icon(Icons.arrow_back),
           onPressed: () => context.pop(),
         ),
-        title: const Text('Publicar viaje'),
+        title: Text(_isEditing ? 'Editar viaje' : 'Publicar viaje'),
         flexibleSpace: Container(
           decoration: const BoxDecoration(gradient: AppColors.primaryGradient),
         ),
@@ -232,6 +431,10 @@ class _CreateTripPageState extends ConsumerState<CreateTripPage> {
                 label: 'DESTINO',
                 hint: '¿Hacia dónde vas?',
                 controller: _destinationController,
+                onChanged: _onDestinationChanged,
+                suggestions: _destinationSuggestions,
+                isSearching: _isSearchingDestination,
+                onSuggestionSelected: _selectDestination,
               ),
               const SizedBox(height: 12),
               _RoutePickerCard(
@@ -246,6 +449,7 @@ class _CreateTripPageState extends ConsumerState<CreateTripPage> {
                   setState(() => _selectingOrigin = value);
                 },
                 onMapTap: _setRoutePoint,
+                onRefreshLocation: () => _useCurrentLocation(refresh: true),
               ),
               const SizedBox(height: 12),
               Row(
@@ -279,11 +483,16 @@ class _CreateTripPageState extends ConsumerState<CreateTripPage> {
                 keyboardType: const TextInputType.numberWithOptions(
                   decimal: true,
                 ),
+                readOnly: true,
+                helperText: _fareHint,
               ),
               const SizedBox(height: 12),
               _SeatsStepper(
                 seats: _seats,
-                onChanged: (v) => setState(() => _seats = v),
+                onChanged: (v) {
+                  setState(() => _seats = v);
+                  _updateFare();
+                },
               ),
               const SizedBox(height: 12),
               _CommentCard(controller: _commentController),
@@ -303,7 +512,7 @@ class _CreateTripPageState extends ConsumerState<CreateTripPage> {
         child: SafeArea(
           top: false,
           child: CustomButton(
-            label: 'Publicar viaje',
+            label: _isEditing ? 'Guardar cambios' : 'Publicar viaje',
             isLoading: notifierState.isLoading,
             onPressed: () async {
               if (!_formKey.currentState!.validate()) return;
@@ -315,6 +524,23 @@ class _CreateTripPageState extends ConsumerState<CreateTripPage> {
                 return;
               }
               if (userId == null) return;
+              if (!_isEditing) {
+                final vehicle = await ref.read(
+                  myVehicleProvider(userId).future,
+                );
+                if (!context.mounted) return;
+                if (vehicle?.isApproved != true) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'Tu vehículo debe estar aprobado antes de publicar un viaje',
+                      ),
+                    ),
+                  );
+                  return;
+                }
+              }
+              if (!context.mounted) return;
               if (_originPoint == null || _destinationPoint == null) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
@@ -323,22 +549,69 @@ class _CreateTripPageState extends ConsumerState<CreateTripPage> {
                 );
                 return;
               }
-              await ref
-                  .read(tripNotifierProvider.notifier)
-                  .createTrip(
-                    userId,
-                    _originController.text.trim(),
-                    _destinationController.text.trim(),
-                    dt,
-                    _seats,
-                    double.parse(_priceController.text.trim()),
-                    originLatitude: _originPoint!.latitude,
-                    originLongitude: _originPoint!.longitude,
-                    destinationLatitude: _destinationPoint!.latitude,
-                    destinationLongitude: _destinationPoint!.longitude,
-                    routeDistanceMeters: _routeInfo?.distanceMeters,
-                    routeDurationSeconds: _routeInfo?.durationSeconds,
-                  );
+              if (_routeInfo == null || _routeInfo!.points.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'Calcula una ruta válida antes de publicar el viaje',
+                    ),
+                  ),
+                );
+                return;
+              }
+              if (_isEditing) {
+                final tripId = widget.editTripId!;
+                final existing = await ref.read(
+                  tripByIdProvider(tripId).future,
+                );
+                final occupiedSeats =
+                    existing.totalSeats - existing.availableSeats;
+                final availableSeats = (_seats - occupiedSeats).clamp(
+                  0,
+                  _seats,
+                );
+                await ref
+                    .read(tripNotifierProvider.notifier)
+                    .updateTrip(tripId, userId, {
+                      'origin': _originController.text.trim(),
+                      'destination': _destinationController.text.trim(),
+                      'departure_time': dt.toIso8601String(),
+                      'total_seats': _seats,
+                      'available_seats': availableSeats,
+                      'price_per_seat': double.parse(
+                        _priceController.text.trim(),
+                      ),
+                      'origin_latitude': _originPoint!.latitude,
+                      'origin_longitude': _originPoint!.longitude,
+                      'destination_latitude': _destinationPoint!.latitude,
+                      'destination_longitude': _destinationPoint!.longitude,
+                      'route_distance_meters': _routeInfo?.distanceMeters,
+                      'route_duration_seconds': _routeInfo?.durationSeconds,
+                      'route_points': RouteGeometry.encodePoints(
+                        _routeInfo!.points,
+                      ),
+                    });
+              } else {
+                await ref
+                    .read(tripNotifierProvider.notifier)
+                    .createTrip(
+                      userId,
+                      _originController.text.trim(),
+                      _destinationController.text.trim(),
+                      dt,
+                      _seats,
+                      double.parse(_priceController.text.trim()),
+                      originLatitude: _originPoint!.latitude,
+                      originLongitude: _originPoint!.longitude,
+                      destinationLatitude: _destinationPoint!.latitude,
+                      destinationLongitude: _destinationPoint!.longitude,
+                      routeDistanceMeters: _routeInfo?.distanceMeters,
+                      routeDurationSeconds: _routeInfo?.durationSeconds,
+                      routePoints: RouteGeometry.encodePoints(
+                        _routeInfo!.points,
+                      ),
+                    );
+              }
             },
           ),
         ),
@@ -357,6 +630,7 @@ class _RoutePickerCard extends StatelessWidget {
   final bool selectingOrigin;
   final ValueChanged<bool> onSelectingOriginChanged;
   final ValueChanged<LatLng> onMapTap;
+  final VoidCallback onRefreshLocation;
 
   const _RoutePickerCard({
     required this.locationAsync,
@@ -368,6 +642,7 @@ class _RoutePickerCard extends StatelessWidget {
     required this.selectingOrigin,
     required this.onSelectingOriginChanged,
     required this.onMapTap,
+    required this.onRefreshLocation,
   });
 
   @override
@@ -413,6 +688,14 @@ class _RoutePickerCard extends StatelessWidget {
                 ),
               ),
             ],
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(
+              onPressed: onRefreshLocation,
+              icon: const Icon(Icons.my_location, size: 18),
+              label: const Text('Actualizar GPS'),
+            ),
           ),
           const SizedBox(height: 12),
           ClipRRect(
@@ -614,6 +897,12 @@ class _FormCard extends StatelessWidget {
   final TextEditingController controller;
   final String? prefix;
   final TextInputType? keyboardType;
+  final bool readOnly;
+  final String? helperText;
+  final ValueChanged<String>? onChanged;
+  final List<PlaceSuggestion> suggestions;
+  final bool isSearching;
+  final ValueChanged<PlaceSuggestion>? onSuggestionSelected;
 
   const _FormCard({
     required this.icon,
@@ -622,6 +911,12 @@ class _FormCard extends StatelessWidget {
     required this.controller,
     this.prefix,
     this.keyboardType,
+    this.readOnly = false,
+    this.helperText,
+    this.onChanged,
+    this.suggestions = const [],
+    this.isSearching = false,
+    this.onSuggestionSelected,
   });
 
   @override
@@ -639,81 +934,120 @@ class _FormCard extends StatelessWidget {
           ),
         ],
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: AppColors.primarySoft,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(icon, color: AppColors.primary),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: AppTextStyles.labelSmall.copyWith(letterSpacing: 1),
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppColors.primarySoft,
+                  borderRadius: BorderRadius.circular(12),
                 ),
-                const SizedBox(height: 4),
-                if (prefix != null)
-                  Row(
-                    children: [
-                      Text(
-                        prefix!,
-                        style: AppTextStyles.bodyLarge.copyWith(
-                          color: AppColors.onBackground,
-                        ),
-                      ),
-                      const SizedBox(width: 4),
-                      Expanded(
-                        child: TextFormField(
-                          controller: controller,
-                          keyboardType: keyboardType,
-                          decoration: InputDecoration.collapsed(
-                            hintText: hint,
-                            hintStyle: AppTextStyles.bodyLarge.copyWith(
-                              color: AppColors.outline,
-                            ),
-                          ),
-                          style: AppTextStyles.bodyLarge,
-                          validator: (v) {
-                            if (v == null || v.trim().isEmpty) {
-                              return 'Campo requerido';
-                            }
-                            final n = double.tryParse(v.trim());
-                            if (n == null || n <= 0) {
-                              return 'Debe ser mayor a 0';
-                            }
-                            return null;
-                          },
-                        ),
-                      ),
-                    ],
-                  )
-                else
-                  TextFormField(
-                    controller: controller,
-                    decoration: InputDecoration.collapsed(
-                      hintText: hint,
-                      hintStyle: AppTextStyles.bodyLarge.copyWith(
-                        color: AppColors.outline,
+                child: Icon(icon, color: AppColors.primary),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      label,
+                      style: AppTextStyles.labelSmall.copyWith(
+                        letterSpacing: 1,
                       ),
                     ),
-                    style: AppTextStyles.bodyLarge,
-                    validator: (v) {
-                      if (v == null || v.trim().isEmpty) {
-                        return 'Campo requerido';
-                      }
-                      return null;
-                    },
-                  ),
-              ],
-            ),
+                    const SizedBox(height: 4),
+                    if (prefix != null)
+                      Row(
+                        children: [
+                          Text(
+                            prefix!,
+                            style: AppTextStyles.bodyLarge.copyWith(
+                              color: AppColors.onBackground,
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: TextFormField(
+                              controller: controller,
+                              keyboardType: keyboardType,
+                              readOnly: readOnly,
+                              onChanged: onChanged,
+                              decoration: InputDecoration.collapsed(
+                                hintText: hint,
+                                hintStyle: AppTextStyles.bodyLarge.copyWith(
+                                  color: AppColors.outline,
+                                ),
+                              ),
+                              style: AppTextStyles.bodyLarge,
+                              validator: (v) {
+                                if (v == null || v.trim().isEmpty) {
+                                  return 'Campo requerido';
+                                }
+                                final n = double.tryParse(v.trim());
+                                if (n == null || n <= 0) {
+                                  return 'Debe ser mayor a 0';
+                                }
+                                return null;
+                              },
+                            ),
+                          ),
+                        ],
+                      )
+                    else
+                      TextFormField(
+                        controller: controller,
+                        readOnly: readOnly,
+                        onChanged: onChanged,
+                        decoration: InputDecoration.collapsed(
+                          hintText: hint,
+                          hintStyle: AppTextStyles.bodyLarge.copyWith(
+                            color: AppColors.outline,
+                          ),
+                        ),
+                        style: AppTextStyles.bodyLarge,
+                        validator: (v) {
+                          if (v == null || v.trim().isEmpty) {
+                            return 'Campo requerido';
+                          }
+                          return null;
+                        },
+                      ),
+                  ],
+                ),
+              ),
+            ],
           ),
+          if (helperText != null) ...[
+            const SizedBox(height: 10),
+            Text(
+              helperText!,
+              style: AppTextStyles.bodySmall.copyWith(
+                color: AppColors.textSecondary,
+              ),
+            ),
+          ],
+          if (isSearching) ...[
+            const SizedBox(height: 10),
+            const LinearProgressIndicator(minHeight: 2),
+          ],
+          if (suggestions.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            ...suggestions.map(
+              (suggestion) => ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.location_on_outlined),
+                title: Text(
+                  suggestion.displayName,
+                  style: AppTextStyles.bodySmall,
+                ),
+                onTap: () => onSuggestionSelected?.call(suggestion),
+              ),
+            ),
+          ],
         ],
       ),
     );

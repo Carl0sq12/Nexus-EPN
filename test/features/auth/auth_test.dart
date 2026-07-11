@@ -1,11 +1,23 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nexus_campus/core/providers/appwrite_provider.dart';
 import 'package:nexus_campus/features/auth/domain/entities/auth_user.dart';
 import 'package:nexus_campus/features/auth/domain/repositories/auth_repository.dart';
 import 'package:nexus_campus/features/auth/presentation/providers/auth_provider.dart';
 
 void main() {
   group('AuthNotifier', () {
+    ProviderContainer buildContainer(AuthRepository repository) {
+      return ProviderContainer(
+        overrides: [
+          authRepositoryProvider.overrideWithValue(repository),
+          authSessionControllerProvider.overrideWith(
+            (ref) => AuthSessionController.seeded(const AsyncValue.data(null)),
+          ),
+        ],
+      );
+    }
+
     test('signIn stores the authenticated user on success', () async {
       final user = AuthUser(
         id: 'user-1',
@@ -14,9 +26,7 @@ void main() {
         role: 'passenger',
       );
       final repository = _FakeAuthRepository(signInResult: user);
-      final container = ProviderContainer(
-        overrides: [authRepositoryProvider.overrideWithValue(repository)],
-      );
+      final container = buildContainer(repository);
       addTearDown(container.dispose);
 
       await container
@@ -30,9 +40,7 @@ void main() {
 
     test('signIn stores an AsyncError when the repository fails', () async {
       final repository = _FakeAuthRepository(error: Exception('invalid'));
-      final container = ProviderContainer(
-        overrides: [authRepositoryProvider.overrideWithValue(repository)],
-      );
+      final container = buildContainer(repository);
       addTearDown(container.dispose);
 
       await container
@@ -52,9 +60,7 @@ void main() {
           role: 'driver',
         ),
       );
-      final container = ProviderContainer(
-        overrides: [authRepositoryProvider.overrideWithValue(repository)],
-      );
+      final container = buildContainer(repository);
       addTearDown(container.dispose);
 
       await container
@@ -107,6 +113,11 @@ class _FakeAuthRepository implements AuthRepository {
 
   @override
   Future<void> resetPassword(String email) async {
+    if (error != null) throw error!;
+  }
+
+  @override
+  Future<void> resendVerification() async {
     if (error != null) throw error!;
   }
 }

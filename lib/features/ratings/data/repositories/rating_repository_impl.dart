@@ -3,7 +3,7 @@ import '../../domain/entities/rating.dart';
 import '../../domain/repositories/rating_repository.dart';
 import '../datasources/rating_remote_datasource.dart';
 
-/// Implementation of [RatingRepository] using Supabase.
+/// Implementation of [RatingRepository] using Appwrite.
 class RatingRepositoryImpl implements RatingRepository {
   final RatingRemoteDatasource remoteDatasource;
 
@@ -34,6 +34,15 @@ class RatingRepositoryImpl implements RatingRepository {
   Future<List<Rating>> getRatingsForUser(String userId) async {
     try {
       return await remoteDatasource.getRatingsForUser(userId);
+    } catch (e) {
+      throw ServerException(e.toString());
+    }
+  }
+
+  @override
+  Future<List<Rating>> getRatingsForTrip(String tripId) async {
+    try {
+      return await remoteDatasource.getRatingsForTrip(tripId);
     } catch (e) {
       throw ServerException(e.toString());
     }

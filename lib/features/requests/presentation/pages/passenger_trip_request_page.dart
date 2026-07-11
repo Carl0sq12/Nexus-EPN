@@ -6,7 +6,8 @@ import 'package:latlong2/latlong.dart';
 
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/constants/app_text_styles.dart';
-import '../../../../core/providers/supabase_provider.dart';
+import '../../../../core/providers/appwrite_provider.dart';
+import '../../../../core/utils/geo_fare.dart';
 import '../../../../core/widgets/custom_button.dart';
 import '../../../map/domain/entities/route_info.dart';
 import '../../../map/domain/entities/user_location.dart';
@@ -18,8 +19,13 @@ import '../providers/request_provider.dart';
 
 class PassengerTripRequestPage extends ConsumerStatefulWidget {
   final String tripId;
+  final TripRequestStop? initialStop;
 
-  const PassengerTripRequestPage({required this.tripId, super.key});
+  const PassengerTripRequestPage({
+    required this.tripId,
+    this.initialStop,
+    super.key,
+  });
 
   @override
   ConsumerState<PassengerTripRequestPage> createState() =>
@@ -35,34 +41,57 @@ class _PassengerTripRequestPageState
   final List<TripRequestStop> _stops = [];
 
   @override
+  void initState() {
+    super.initState();
+    final initial = widget.initialStop;
+    if (initial != null) {
+      _stops.add(initial);
+      _pickupController.text = initial.label;
+      _dropoffController.text = initial.label;
+    }
+  }
+
+  @override
   void dispose() {
     _pickupController.dispose();
     _dropoffController.dispose();
     super.dispose();
   }
 
-  Future<void> _setStopPoint(LatLng point) async {
-    final stopNumber = _stops.length + 1;
+  Future<void> _setStopPoint(LatLng point, List<LatLng> routePoints) async {
+    if (!RouteGeometry.isNearRoute(point, routePoints)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Solo puedes marcar paradas sobre la ruta del conductor',
+          ),
+        ),
+      );
+      return;
+    }
+    final snappedPoint = RouteGeometry.nearestPointOnRoute(point, routePoints);
     setState(() {
       _loadingLabel = true;
     });
 
     final fallback =
-        'Punto marcado (${point.latitude.toStringAsFixed(5)}, ${point.longitude.toStringAsFixed(5)})';
+        'Punto marcado (${snappedPoint.latitude.toStringAsFixed(5)}, ${snappedPoint.longitude.toStringAsFixed(5)})';
     var label = fallback;
     try {
-      label = await ref.read(reverseGeocodeProvider(point).future);
+      label = await ref.read(reverseGeocodeProvider(snappedPoint).future);
     } catch (_) {
     } finally {
       if (mounted) {
         setState(() {
-          _stops.add(
-            TripRequestStop(
-              label: 'Parada $stopNumber: $label',
-              latitude: point.latitude,
-              longitude: point.longitude,
-            ),
-          );
+          _stops
+            ..clear()
+            ..add(
+              TripRequestStop(
+                label: 'Tu parada: $label',
+                latitude: snappedPoint.latitude,
+                longitude: snappedPoint.longitude,
+              ),
+            );
           _syncLegacyStopFields();
           _loadingLabel = false;
         });
@@ -135,7 +164,7 @@ class _PassengerTripRequestPageState
   @override
   Widget build(BuildContext context) {
     final authState = ref.watch(authStateProvider);
-    final userId = authState.value?.session?.user.id;
+    final userId = authState.value?.userId;
     final requestState = ref.watch(requestNotifierProvider);
     final locationAsync = ref.watch(currentLocationProvider);
 
@@ -166,20 +195,32 @@ class _PassengerTripRequestPageState
                       trip.destinationLongitude!,
                     )
                   : null;
-              final stopPoints = _stops
-                  .map((stop) => LatLng(stop.latitude, stop.longitude))
-                  .toList();
               final routeAsync = tripOrigin != null && tripDestination != null
                   ? ref.watch(
                       routeInfoProvider(
                         RouteRequest(
                           origin: tripOrigin,
                           destination: tripDestination,
-                          waypoints: stopPoints,
                         ),
                       ),
                     )
                   : const AsyncValue<RouteInfo?>.data(null);
+              final routePoints = trip.routePoints?.isNotEmpty == true
+                  ? trip.routePoints!
+                  : routeAsync.asData?.value?.points ?? const <LatLng>[];
+              final visibleRouteInfo = routePoints.isEmpty
+                  ? routeAsync.asData?.value
+                  : RouteInfo(
+                      points: routePoints,
+                      distanceMeters:
+                          routeAsync.asData?.value?.distanceMeters ??
+                          trip.routeDistanceMeters ??
+                          0,
+                      durationSeconds:
+                          routeAsync.asData?.value?.durationSeconds ??
+                          trip.routeDurationSeconds ??
+                          0,
+                    );
 
               return SingleChildScrollView(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
@@ -195,15 +236,37 @@ class _PassengerTripRequestPageState
                           setState(() => _passengerCount = value),
                     ),
                     const SizedBox(height: 12),
-                    _StopField(
-                      icon: Icons.person_pin_circle_outlined,
-                      label: 'PRIMERA PARADA',
-                      controller: _pickupController,
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: AppColors.primarySoft,
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Icon(
+                            Icons.touch_app_outlined,
+                            color: AppColors.primary,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              'Antes de solicitar, toca el mapa sobre la ruta del conductor para marcar tu parada. '
+                              'Esa ubicación se enviará al conductor para que apruebe o rechace.',
+                              style: AppTextStyles.bodySmall.copyWith(
+                                color: AppColors.primary,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                     const SizedBox(height: 12),
                     _StopField(
                       icon: Icons.flag_outlined,
-                      label: 'ÚLTIMA PARADA',
+                      label: 'TU PARADA',
                       controller: _dropoffController,
                     ),
                     if (_stops.isNotEmpty) ...[
@@ -213,12 +276,12 @@ class _PassengerTripRequestPageState
                     const SizedBox(height: 12),
                     _StopsMapCard(
                       locationAsync: locationAsync,
-                      routeInfo: routeAsync.asData?.value,
+                      routeInfo: visibleRouteInfo,
                       tripOrigin: tripOrigin,
                       tripDestination: tripDestination,
                       stops: _stops,
                       loadingLabel: _loadingLabel,
-                      onMapTap: _setStopPoint,
+                      onMapTap: (point) => _setStopPoint(point, routePoints),
                     ),
                   ],
                 ),
@@ -240,9 +303,13 @@ class _PassengerTripRequestPageState
               child: SafeArea(
                 top: false,
                 child: CustomButton(
-                  label: 'Enviar solicitud',
+                  label: _stops.isEmpty
+                      ? 'Marca tu parada para continuar'
+                      : 'Enviar solicitud',
                   isLoading: requestState.isLoading,
-                  onPressed: userId == null || requestState.isLoading
+                  onPressed: userId == null ||
+                          requestState.isLoading ||
+                          _stops.isEmpty
                       ? null
                       : () => _submit(trip, userId),
                 ),
@@ -462,7 +529,7 @@ class _StopsMapCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('MARCAR PARADAS', style: AppTextStyles.labelSmall),
+          Text('MARCAR TU PARADA', style: AppTextStyles.labelSmall),
           const SizedBox(height: 12),
           ClipRRect(
             borderRadius: BorderRadius.circular(14),
@@ -498,7 +565,7 @@ class _StopsMapCard extends StatelessWidget {
           Text(
             loadingLabel
                 ? 'Buscando dirección...'
-                : 'Toca el mapa para agregar cada parada en orden.',
+                : 'Toca la ruta para elegir tu única parada.',
             style: AppTextStyles.bodySmall.copyWith(
               color: AppColors.textSecondary,
             ),

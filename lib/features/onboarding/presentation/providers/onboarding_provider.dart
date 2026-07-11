@@ -1,6 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../../core/providers/supabase_provider.dart';
+import '../../../../core/providers/appwrite_provider.dart';
 import '../../../../core/providers/session_data_provider.dart';
 import '../../../profile/presentation/providers/profile_provider.dart';
 import '../../../sos/presentation/providers/emergency_contacts_provider.dart';
@@ -11,7 +11,7 @@ import '../../domain/usecases/get_onboarding_status_usecase.dart';
 final getOnboardingStatusUseCaseProvider = Provider<GetOnboardingStatusUseCase>(
   (ref) {
     return GetOnboardingStatusUseCase(
-      supabaseClient: ref.watch(supabaseClientProvider),
+      account: ref.watch(accountProvider),
       profileRepository: ref.watch(profileRepositoryProvider),
       vehicleRepository: ref.watch(vehicleRepositoryProvider),
       emergencyContactsRepository: ref.watch(
@@ -22,10 +22,6 @@ final getOnboardingStatusUseCaseProvider = Provider<GetOnboardingStatusUseCase>(
 );
 
 /// Central provider used by Splash and GoRouter guards.
-///
-/// Business rules implemented by [GetOnboardingStatusUseCase]:
-/// session, verified email, profile completeness, role, driver vehicle and
-/// minimum emergency contacts.
 final onboardingStatusProvider = FutureProvider<OnboardingStatus>((ref) async {
   ref.watch(authStateProvider);
   ref.watch(sessionDataVersionProvider);

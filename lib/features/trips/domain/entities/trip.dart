@@ -1,4 +1,5 @@
 import 'package:equatable/equatable.dart';
+import 'package:latlong2/latlong.dart';
 
 /// Entity representing a trip published by a driver.
 class Trip extends Equatable {
@@ -17,6 +18,7 @@ class Trip extends Equatable {
   final double? destinationLongitude;
   final double? routeDistanceMeters;
   final double? routeDurationSeconds;
+  final List<LatLng>? routePoints;
 
   const Trip({
     required this.id,
@@ -34,6 +36,7 @@ class Trip extends Equatable {
     this.destinationLongitude,
     this.routeDistanceMeters,
     this.routeDurationSeconds,
+    this.routePoints,
   });
 
   @override
@@ -53,5 +56,6 @@ class Trip extends Equatable {
     destinationLongitude,
     routeDistanceMeters,
     routeDurationSeconds,
+    routePoints,
   ];
 }

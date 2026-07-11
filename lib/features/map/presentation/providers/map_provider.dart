@@ -43,6 +43,7 @@ final currentLocationStreamProvider = StreamProvider<UserLocation>((
   yield UserLocation(
     latitude: initialPosition.latitude,
     longitude: initialPosition.longitude,
+    heading: initialPosition.heading,
   );
 
   yield* Geolocator.getPositionStream(
@@ -54,6 +55,7 @@ final currentLocationStreamProvider = StreamProvider<UserLocation>((
     (position) => UserLocation(
       latitude: position.latitude,
       longitude: position.longitude,
+      heading: position.heading,
     ),
   );
 });

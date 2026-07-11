@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../core/providers/appwrite_provider.dart';
 import '../../../../core/providers/session_data_provider.dart';
 import '../../data/datasources/auth_remote_datasource.dart';
 import '../../data/repositories/auth_repository_impl.dart';
@@ -8,7 +9,10 @@ import '../../domain/repositories/auth_repository.dart';
 
 /// Datasource provider for auth remote datasource.
 final authRemoteDatasourceProvider = Provider<AuthRemoteDatasource>(
-  (ref) => AuthRemoteDatasource(),
+  (ref) => AuthRemoteDatasource(
+    account: ref.watch(accountProvider),
+    databases: ref.watch(databasesProvider),
+  ),
 );
 
 /// Repository provider for auth.
@@ -28,6 +32,7 @@ class AuthNotifier extends StateNotifier<AsyncValue<AuthUser?>> {
     state = const AsyncValue.loading();
     try {
       final user = await _repo.signIn(email, password);
+      await ref.read(authSessionControllerProvider.notifier).refresh();
       ref.read(sessionDataVersionProvider.notifier).state++;
       state = AsyncValue.data(user);
     } catch (e, st) {
@@ -49,6 +54,7 @@ class AuthNotifier extends StateNotifier<AsyncValue<AuthUser?>> {
         role: role,
         fullName: fullName,
       );
+      await ref.read(authSessionControllerProvider.notifier).refresh();
       ref.read(sessionDataVersionProvider.notifier).state++;
       state = AsyncValue.data(user);
       return user;
@@ -62,6 +68,7 @@ class AuthNotifier extends StateNotifier<AsyncValue<AuthUser?>> {
     state = const AsyncValue.loading();
     try {
       await _repo.signOut();
+      await ref.read(authSessionControllerProvider.notifier).clear();
       ref.read(sessionDataVersionProvider.notifier).state++;
       state = const AsyncValue.data(null);
     } catch (e, st) {
@@ -77,6 +84,10 @@ class AuthNotifier extends StateNotifier<AsyncValue<AuthUser?>> {
     } catch (e, st) {
       state = AsyncValue.error(e, st);
     }
+  }
+
+  Future<void> resendVerification() async {
+    await _repo.resendVerification();
   }
 }
 

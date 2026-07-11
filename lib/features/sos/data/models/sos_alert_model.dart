@@ -21,14 +21,15 @@ class SosAlertModel extends SosAlert {
        );
 
   factory SosAlertModel.fromJson(Map<String, dynamic> json) {
+    final createdRaw = json['created_at'] ?? json[r'$createdAt'];
     return SosAlertModel(
-      id: json['id'] as String,
+      id: (json['id'] ?? json[r'$id']) as String,
       userId: json['user_id'] as String,
       latitude: (json['latitude'] as num).toDouble(),
       longitude: (json['longitude'] as num).toDouble(),
       message: json['message'] as String? ?? '',
       type: json['type'] as String? ?? 'personal_emergency',
-      createdAt: DateTime.parse(json['created_at'] as String),
+      createdAt: DateTime.parse(createdRaw as String),
     );
   }
 

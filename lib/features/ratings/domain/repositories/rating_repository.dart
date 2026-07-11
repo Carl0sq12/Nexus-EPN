@@ -13,4 +13,7 @@ abstract class RatingRepository {
 
   /// Returns all ratings received by a specific user.
   Future<List<Rating>> getRatingsForUser(String userId);
+
+  /// Returns all ratings for a specific trip.
+  Future<List<Rating>> getRatingsForTrip(String tripId);
 }

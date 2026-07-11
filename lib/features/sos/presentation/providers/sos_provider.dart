@@ -1,12 +1,12 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../../core/providers/supabase_provider.dart';
+import '../../../../core/providers/appwrite_provider.dart';
 import '../../domain/usecases/send_sos_usecase.dart';
 import '../../data/datasources/sos_remote_datasource.dart';
 import '../../data/repositories/sos_repository_impl.dart';
 
 /// Provider for the SOS remote datasource.
 final sosDatasourceProvider = Provider<SosRemoteDatasource>((ref) {
-  return SosRemoteDatasource(ref.watch(supabaseClientProvider));
+  return SosRemoteDatasource(ref.watch(databasesProvider));
 });
 
 /// Provider for the SOS repository.

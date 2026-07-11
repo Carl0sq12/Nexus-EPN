@@ -1,5 +1,10 @@
+import 'package:appwrite/appwrite.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../../core/providers/supabase_provider.dart';
+
+import '../../../../core/config/appwrite_config.dart';
+import '../../../../core/constants/app_strings.dart';
+import '../../../../core/network/appwrite_helpers.dart';
+import '../../../../core/providers/appwrite_provider.dart';
 import '../../domain/entities/trip_request.dart';
 import '../../domain/usecases/send_request_usecase.dart';
 import '../../domain/usecases/accept_request_usecase.dart';
@@ -8,18 +13,23 @@ import '../../domain/usecases/propose_price_usecase.dart';
 import '../../domain/usecases/accept_proposed_price_usecase.dart';
 import '../../data/datasources/request_remote_datasource.dart';
 import '../../data/repositories/request_repository_impl.dart';
+import '../../../trips/domain/entities/trip.dart';
 import '../../../trips/presentation/providers/trip_provider.dart';
+import '../../../ratings/presentation/providers/rating_provider.dart';
+import '../../../notifications/presentation/providers/notification_provider.dart';
+import '../../../profile/presentation/providers/profile_provider.dart';
+import '../../../chat/data/datasources/chat_remote_datasource.dart';
 
 /// Provider for the request remote datasource.
 final requestDatasourceProvider = Provider<RequestRemoteDatasource>((ref) {
-  return RequestRemoteDatasource(ref.watch(supabaseClientProvider));
+  return RequestRemoteDatasource(ref.watch(databasesProvider));
 });
 
 /// Provider for the request repository.
 final requestRepositoryProvider = Provider<RequestRepositoryImpl>((ref) {
   return RequestRepositoryImpl(
     ref.watch(requestDatasourceProvider),
-    ref.watch(supabaseClientProvider),
+    ref.watch(tripDatasourceProvider),
   );
 });
 
@@ -68,6 +78,19 @@ class RequestNotifier extends StateNotifier<AsyncValue<void>> {
   }) async {
     state = const AsyncValue.loading();
     try {
+      if (stops.isEmpty) {
+        throw Exception('Debes marcar tu parada en la ruta antes de solicitar');
+      }
+
+      final trip = await ref.read(tripRepositoryProvider).getTripById(tripId);
+      String passengerName = 'Un pasajero';
+      try {
+        final profile = await ref.read(profileProvider(passengerId).future);
+        passengerName = profile.fullName.trim().isEmpty
+            ? passengerName
+            : profile.fullName.trim();
+      } catch (_) {}
+
       await ref.read(sendRequestUseCaseProvider)(
         SendRequestParams(
           tripId: tripId,
@@ -82,8 +105,30 @@ class RequestNotifier extends StateNotifier<AsyncValue<void>> {
           stops: stops,
         ),
       );
+
+      final stopLabel = stops.first.label
+          .replaceFirst(RegExp(r'^Tu parada:\s*'), '')
+          .trim();
+      final seatsLabel =
+          passengerCount == 1 ? '1 cupo' : '$passengerCount cupos';
+      try {
+        await ref.read(notificationRemoteDatasourceProvider).create(
+              userId: trip.driverId,
+              title: 'Nueva solicitud de $passengerName',
+              body:
+                  '$passengerName pide $seatsLabel en ${trip.origin} → ${trip.destination}. '
+                  'Parada: $stopLabel',
+              type: 'trip_request',
+              relatedId: tripId,
+            );
+        ref.invalidate(notificationsProvider(trip.driverId));
+      } catch (_) {
+        // Request already saved; don't fail the flow if notify fails.
+      }
+
       ref.invalidate(myRequestsProvider(passengerId));
       ref.invalidate(requestsByTripProvider(tripId));
+      ref.invalidate(driverIncomingRequestsProvider(trip.driverId));
       state = const AsyncValue.data(null);
     } catch (e, st) {
       state = AsyncValue.error(e, st);
@@ -98,6 +143,10 @@ class RequestNotifier extends StateNotifier<AsyncValue<void>> {
   }) async {
     state = const AsyncValue.loading();
     try {
+      final request = await ref
+          .read(requestRepositoryProvider)
+          .getRequestById(requestId);
+      final trip = await ref.read(tripRepositoryProvider).getTripById(tripId);
       await ref.read(proposePriceUseCaseProvider)(
         ProposePriceParams(
           requestId: requestId,
@@ -106,7 +155,20 @@ class RequestNotifier extends StateNotifier<AsyncValue<void>> {
           priceNote: priceNote,
         ),
       );
+      try {
+        await ref.read(notificationRemoteDatasourceProvider).create(
+              userId: request.passengerId,
+              title: 'Precio propuesto',
+              body:
+                  'El conductor propuso \$${proposedPrice.toStringAsFixed(2)} '
+                  'por cupo en ${trip.origin} → ${trip.destination}.',
+              type: 'price_proposed',
+              relatedId: tripId,
+            );
+        ref.invalidate(notificationsProvider(request.passengerId));
+      } catch (_) {}
       ref.invalidate(requestsByTripProvider(tripId));
+      ref.invalidate(myRequestsProvider(request.passengerId));
       state = const AsyncValue.data(null);
     } catch (e, st) {
       state = AsyncValue.error(e, st);
@@ -128,11 +190,42 @@ class RequestNotifier extends StateNotifier<AsyncValue<void>> {
       await ref.read(acceptProposedPriceUseCaseProvider)(
         AcceptProposedPriceParams(requestId: requestId, tripId: tripId),
       );
+      if (driverId != null) {
+        try {
+          String passengerName = 'El pasajero';
+          try {
+            final profile = await ref.read(profileProvider(passengerId).future);
+            passengerName = profile.fullName.trim().isEmpty
+                ? passengerName
+                : profile.fullName.trim();
+          } catch (_) {}
+          await ref.read(notificationRemoteDatasourceProvider).create(
+                userId: driverId,
+                title: 'Precio aceptado',
+                body: '$passengerName aceptó el precio propuesto',
+                type: 'price_accepted',
+                relatedId: tripId,
+              );
+          ref.invalidate(notificationsProvider(driverId));
+          final trip =
+              await ref.read(tripRepositoryProvider).getTripById(tripId);
+          await _announcePassengerJoinedChat(
+            ref,
+            tripId: tripId,
+            trip: trip,
+            passengerId: passengerId,
+            passengerName: passengerName,
+          );
+        } catch (_) {}
+      }
       ref.invalidate(myRequestsProvider(passengerId));
       ref.invalidate(requestsByTripProvider(tripId));
       ref.invalidate(availableTripsProvider);
       ref.invalidate(tripByIdProvider(tripId));
-      if (driverId != null) ref.invalidate(myTripsProvider(driverId));
+      if (driverId != null) {
+        ref.invalidate(myTripsProvider(driverId));
+        ref.invalidate(driverIncomingRequestsProvider(driverId));
+      }
       state = const AsyncValue.data(null);
     } catch (e, st) {
       state = AsyncValue.error(e, st);
@@ -142,30 +235,134 @@ class RequestNotifier extends StateNotifier<AsyncValue<void>> {
   Future<void> acceptRequest(String requestId, String tripId) async {
     state = const AsyncValue.loading();
     try {
-      String? driverId;
-      try {
-        final trip = await ref.read(tripRepositoryProvider).getTripById(tripId);
-        driverId = trip.driverId;
-      } catch (_) {}
-      await ref.read(acceptRequestUseCaseProvider)(
+      final trip = await ref.read(tripRepositoryProvider).getTripById(tripId);
+      final accepted = await ref.read(acceptRequestUseCaseProvider)(
         AcceptRequestParams(requestId: requestId, tripId: tripId),
       );
+      try {
+        await ref.read(notificationRemoteDatasourceProvider).create(
+              userId: accepted.passengerId,
+              title: 'Solicitud aceptada',
+              body:
+                  'Tu solicitud de cupo fue aceptada para '
+                  '${trip.origin} → ${trip.destination}.',
+              type: 'request_accepted',
+              relatedId: tripId,
+            );
+        ref.invalidate(notificationsProvider(accepted.passengerId));
+      } catch (_) {}
+
+      String passengerName = 'Un pasajero';
+      try {
+        final profile =
+            await ref.read(profileProvider(accepted.passengerId).future);
+        final name = profile.fullName.trim();
+        if (name.isNotEmpty) passengerName = name;
+      } catch (_) {}
+      await _announcePassengerJoinedChat(
+        ref,
+        tripId: tripId,
+        trip: trip,
+        passengerId: accepted.passengerId,
+        passengerName: passengerName,
+      );
+
+      ref.invalidate(myRequestsProvider(accepted.passengerId));
       ref.invalidate(requestsByTripProvider(tripId));
       ref.invalidate(availableTripsProvider);
       ref.invalidate(tripByIdProvider(tripId));
-      if (driverId != null) ref.invalidate(myTripsProvider(driverId));
+      ref.invalidate(myTripsProvider(trip.driverId));
+      ref.invalidate(driverIncomingRequestsProvider(trip.driverId));
       state = const AsyncValue.data(null);
     } catch (e, st) {
       state = AsyncValue.error(e, st);
     }
   }
 
-  Future<void> rejectRequest(String requestId) async {
+  Future<void> rejectRequest(
+    String requestId, {
+    String? tripId,
+    String? passengerId,
+  }) async {
     state = const AsyncValue.loading();
     try {
+      String? resolvedTripId = tripId;
+      String? resolvedPassengerId = passengerId;
+      String routeLabel = 'tu viaje';
+      try {
+        final request = await ref
+            .read(requestRepositoryProvider)
+            .getRequestById(requestId);
+        resolvedTripId ??= request.tripId;
+        resolvedPassengerId ??= request.passengerId;
+        final trip =
+            await ref.read(tripRepositoryProvider).getTripById(request.tripId);
+        routeLabel = '${trip.origin} → ${trip.destination}';
+      } catch (_) {}
+
       await ref.read(rejectRequestUseCaseProvider)(
         RejectRequestParams(requestId: requestId),
       );
+
+      if (resolvedPassengerId != null) {
+        try {
+          await ref.read(notificationRemoteDatasourceProvider).create(
+                userId: resolvedPassengerId,
+                title: 'Solicitud rechazada',
+                body: 'Tu solicitud de cupo fue rechazada para $routeLabel.',
+                type: 'request_rejected',
+                relatedId: resolvedTripId,
+              );
+          ref.invalidate(notificationsProvider(resolvedPassengerId));
+          ref.invalidate(myRequestsProvider(resolvedPassengerId));
+        } catch (_) {}
+      }
+      if (resolvedTripId != null) {
+        ref.invalidate(requestsByTripProvider(resolvedTripId));
+        try {
+          final trip =
+              await ref.read(tripRepositoryProvider).getTripById(resolvedTripId);
+          ref.invalidate(driverIncomingRequestsProvider(trip.driverId));
+        } catch (_) {}
+      }
+      state = const AsyncValue.data(null);
+    } catch (e, st) {
+      state = AsyncValue.error(e, st);
+    }
+  }
+
+  Future<void> cancelRequest(
+    String requestId, {
+    required String tripId,
+    required String passengerId,
+  }) async {
+    state = const AsyncValue.loading();
+    try {
+      final trip = await ref.read(tripRepositoryProvider).getTripById(tripId);
+      String passengerName = 'El pasajero';
+      try {
+        final profile = await ref.read(profileProvider(passengerId).future);
+        passengerName = profile.fullName.trim().isEmpty
+            ? passengerName
+            : profile.fullName.trim();
+      } catch (_) {}
+      await ref.read(requestRepositoryProvider).cancelRequest(requestId);
+      try {
+        await ref.read(notificationRemoteDatasourceProvider).create(
+              userId: trip.driverId,
+              title: 'Solicitud cancelada',
+              body: '$passengerName canceló su solicitud',
+              type: 'request_cancelled',
+              relatedId: tripId,
+            );
+        ref.invalidate(notificationsProvider(trip.driverId));
+      } catch (_) {}
+      ref.invalidate(myRequestsProvider(passengerId));
+      ref.invalidate(requestsByTripProvider(tripId));
+      ref.invalidate(availableTripsProvider);
+      ref.invalidate(tripByIdProvider(tripId));
+      ref.invalidate(myTripsProvider(trip.driverId));
+      ref.invalidate(driverIncomingRequestsProvider(trip.driverId));
       state = const AsyncValue.data(null);
     } catch (e, st) {
       state = AsyncValue.error(e, st);
@@ -179,7 +376,7 @@ final requestNotifierProvider =
       return RequestNotifier(ref);
     });
 
-/// Watches all requests for a given trip without requiring Supabase Realtime.
+/// Watches all requests for a given trip (polling).
 final requestsByTripProvider = StreamProvider.family<List<TripRequest>, String>(
   (ref, tripId) {
     final repository = ref.watch(requestRepositoryProvider);
@@ -187,8 +384,7 @@ final requestsByTripProvider = StreamProvider.family<List<TripRequest>, String>(
   },
 );
 
-/// Watches all non-finalized requests made by a given passenger without
-/// depending on Supabase Realtime being enabled for the table.
+/// Watches all non-finalized requests made by a given passenger (polling).
 final myRequestsProvider = StreamProvider.family<List<TripRequest>, String>((
   ref,
   passengerId,
@@ -196,6 +392,77 @@ final myRequestsProvider = StreamProvider.family<List<TripRequest>, String>((
   final repository = ref.watch(requestRepositoryProvider);
   return _pollRequests(() => repository.getMyRequests(passengerId));
 });
+
+/// Single request by id.
+final requestByIdProvider =
+    FutureProvider.family<TripRequest, String>((ref, requestId) async {
+  return ref.watch(requestRepositoryProvider).getRequestById(requestId);
+});
+
+/// Incoming actionable requests for a driver's active trips.
+final driverIncomingRequestsProvider =
+    FutureProvider.family<List<DriverIncomingRequest>, String>((
+  ref,
+  driverId,
+) async {
+  final trips = await ref.watch(myTripsProvider(driverId).future);
+  final repository = ref.watch(requestRepositoryProvider);
+  final activeTrips = trips.where(
+    (trip) =>
+        trip.status == AppStrings.statusActive ||
+        trip.status == AppStrings.statusFull ||
+        trip.status == AppStrings.statusInProgress,
+  );
+
+  final incoming = <DriverIncomingRequest>[];
+  for (final trip in activeTrips) {
+    final requests = await repository.getRequestsForTrip(trip.id);
+    for (final request in requests) {
+      if (request.status == AppStrings.statusPending ||
+          request.status == AppStrings.statusPriceProposed) {
+        incoming.add(DriverIncomingRequest(trip: trip, request: request));
+      }
+    }
+  }
+  incoming.sort(
+    (a, b) => b.request.createdAt.compareTo(a.request.createdAt),
+  );
+  return incoming;
+});
+
+/// Unread in-app notifications count.
+final unreadNotificationsCountProvider =
+    Provider.family<int, String>((ref, userId) {
+  final notifications = ref.watch(notificationsProvider(userId)).asData?.value;
+  if (notifications == null) return 0;
+  return notifications.where((n) => !n.read).length;
+});
+
+/// Badge count for the solicitudes icon (role-aware).
+final requestsBadgeCountProvider = Provider.family<int, String>((ref, userId) {
+  final profile = ref.watch(profileProvider(userId)).asData?.value;
+  if (profile == null) return 0;
+  if (profile.role == AppStrings.roleDriver) {
+    return ref.watch(driverIncomingRequestsProvider(userId)).asData?.value.length ??
+        0;
+  }
+  final mine = ref.watch(myRequestsProvider(userId)).asData?.value;
+  if (mine == null) return 0;
+  return mine
+      .where(
+        (r) =>
+            r.status == AppStrings.statusPending ||
+            r.status == AppStrings.statusPriceProposed,
+      )
+      .length;
+});
+
+class DriverIncomingRequest {
+  final Trip trip;
+  final TripRequest request;
+
+  const DriverIncomingRequest({required this.trip, required this.request});
+}
 
 Stream<List<TripRequest>> _pollRequests(
   Future<List<TripRequest>> Function() load,
@@ -212,42 +479,53 @@ final pendingDriverRatingsProvider =
       ref,
       passengerId,
     ) async {
-      final client = ref.watch(supabaseClientProvider);
-      final response = await client
-          .from('trip_requests')
-          .select(
-            'id, trip_id, passenger_id, status, created_at, '
-            'trips!inner(id, driver_id, origin, destination, status)',
-          )
-          .eq('passenger_id', passengerId)
-          .eq('status', 'accepted')
-          .eq('trips.status', 'completed')
-          .order('created_at', ascending: false);
+      final databases = ref.watch(databasesProvider);
+      final ratingDs = ref.watch(ratingDatasourceProvider);
+      final db = AppwriteConfig.databaseId;
+
+      final requests = await databases.listDocuments(
+        databaseId: db,
+        collectionId: AppwriteConfig.collectionTripRequests,
+        queries: [
+          Query.equal('passenger_id', passengerId),
+          Query.equal('status', 'accepted'),
+          Query.orderDesc(r'$createdAt'),
+        ],
+      );
 
       final pending = <PendingDriverRating>[];
-      for (final item in response as List<dynamic>) {
-        final json = Map<String, dynamic>.from(item as Map);
-        final trip = Map<String, dynamic>.from(json['trips'] as Map);
-        final driverId = trip['driver_id'] as String;
-        final existingRating = await client
-            .from('ratings')
-            .select('id')
-            .eq('trip_id', json['trip_id'] as String)
-            .eq('rater_id', passengerId)
-            .eq('rated_user_id', driverId)
-            .limit(1);
+      for (final doc in requests.documents) {
+        final json = normalizeDocument(doc);
+        final tripId = json['trip_id'] as String;
+        try {
+          final tripDoc = await databases.getDocument(
+            databaseId: db,
+            collectionId: AppwriteConfig.collectionTrips,
+            documentId: tripId,
+          );
+          final trip = normalizeDocument(tripDoc);
+          if (trip['status'] != 'completed') continue;
 
-        if ((existingRating as List).isNotEmpty) continue;
+          final driverId = trip['driver_id'] as String;
+          final alreadyRated = await ratingDs.hasRating(
+            tripId: tripId,
+            raterId: passengerId,
+            ratedUserId: driverId,
+          );
+          if (alreadyRated) continue;
 
-        pending.add(
-          PendingDriverRating(
-            requestId: json['id'] as String,
-            tripId: json['trip_id'] as String,
-            driverId: driverId,
-            origin: trip['origin'] as String? ?? '',
-            destination: trip['destination'] as String? ?? '',
-          ),
-        );
+          pending.add(
+            PendingDriverRating(
+              requestId: json['id'] as String,
+              tripId: tripId,
+              driverId: driverId,
+              origin: trip['origin'] as String? ?? '',
+              destination: trip['destination'] as String? ?? '',
+            ),
+          );
+        } catch (_) {
+          continue;
+        }
       }
 
       return pending;
@@ -267,4 +545,59 @@ class PendingDriverRating {
     required this.origin,
     required this.destination,
   });
+}
+
+Future<void> _announcePassengerJoinedChat(
+  Ref ref, {
+  required String tripId,
+  required Trip trip,
+  required String passengerId,
+  required String passengerName,
+}) async {
+  final name =
+      passengerName.trim().isEmpty ? 'Un pasajero' : passengerName.trim();
+  try {
+    final chatDs = ChatRemoteDatasource(
+      ref.read(databasesProvider),
+      ref.read(realtimeProvider),
+    );
+    await chatDs.sendSystemMessage(tripId, '$name ingresó al chat');
+  } catch (_) {}
+
+  try {
+    final ds = ref.read(notificationRemoteDatasourceProvider);
+    await ds.create(
+      userId: passengerId,
+      title: 'Ya puedes chatear',
+      body: 'Tu cupo fue aceptado. Entra al chat del viaje para coordinar.',
+      type: 'chat',
+      relatedId: tripId,
+    );
+    ref.invalidate(notificationsProvider(passengerId));
+
+    final others = <String>{trip.driverId};
+    try {
+      final requests =
+          await ref.read(requestRepositoryProvider).getRequestsForTrip(tripId);
+      for (final request in requests) {
+        if (request.status == AppStrings.statusAccepted &&
+            request.passengerId != passengerId) {
+          others.add(request.passengerId);
+        }
+      }
+    } catch (_) {}
+
+    for (final userId in others) {
+      try {
+        await ds.create(
+          userId: userId,
+          title: 'Nuevo integrante en el chat',
+          body: '$name ingresó al chat del viaje.',
+          type: 'chat',
+          relatedId: tripId,
+        );
+        ref.invalidate(notificationsProvider(userId));
+      } catch (_) {}
+    }
+  } catch (_) {}
 }

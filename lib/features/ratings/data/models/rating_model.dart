@@ -21,14 +21,15 @@ class RatingModel extends Rating {
        );
 
   factory RatingModel.fromJson(Map<String, dynamic> json) {
+    final createdRaw = json['created_at'] ?? json[r'$createdAt'];
     return RatingModel(
-      id: json['id'] as String,
+      id: (json['id'] ?? json[r'$id']) as String,
       tripId: json['trip_id'] as String,
       raterId: json['rater_id'] as String,
       ratedUserId: json['rated_user_id'] as String,
       score: json['score'] as int,
       comment: json['comment'] as String?,
-      createdAt: DateTime.parse(json['created_at'] as String),
+      createdAt: DateTime.parse(createdRaw as String),
     );
   }
 

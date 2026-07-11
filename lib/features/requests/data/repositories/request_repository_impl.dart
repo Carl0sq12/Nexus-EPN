@@ -1,16 +1,15 @@
-import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../../core/errors/exceptions.dart';
+import '../../../trips/data/datasources/trip_remote_datasource.dart';
 import '../../domain/entities/trip_request.dart';
 import '../../domain/repositories/request_repository.dart';
 import '../datasources/request_remote_datasource.dart';
-import '../models/trip_request_model.dart';
 
-/// Implementation of [RequestRepository] using Supabase.
+/// Implementation of [RequestRepository] using Appwrite datasources.
 class RequestRepositoryImpl implements RequestRepository {
   final RequestRemoteDatasource remoteDatasource;
-  final SupabaseClient supabaseClient;
+  final TripRemoteDatasource tripDatasource;
 
-  const RequestRepositoryImpl(this.remoteDatasource, this.supabaseClient);
+  const RequestRepositoryImpl(this.remoteDatasource, this.tripDatasource);
 
   @override
   Future<List<TripRequest>> getRequestsForTrip(String tripId) async {
@@ -25,6 +24,15 @@ class RequestRepositoryImpl implements RequestRepository {
   Future<List<TripRequest>> getMyRequests(String passengerId) async {
     try {
       return await remoteDatasource.getMyRequests(passengerId);
+    } catch (e) {
+      throw ServerException(e.toString());
+    }
+  }
+
+  @override
+  Future<TripRequest> getRequestById(String requestId) async {
+    try {
+      return await remoteDatasource.getRequestById(requestId);
     } catch (e) {
       throw ServerException(e.toString());
     }
@@ -69,13 +77,11 @@ class RequestRepositoryImpl implements RequestRepository {
     String? priceNote,
   }) async {
     try {
-      final request = await supabaseClient
-          .from('trip_requests')
-          .select('id, status')
-          .eq('id', requestId)
-          .eq('trip_id', tripId)
-          .single();
-      if (request['status'] != 'pending') {
+      final request = await remoteDatasource.getRequestById(requestId);
+      if (request.tripId != tripId) {
+        throw const ServerException('La solicitud no pertenece a este viaje');
+      }
+      if (request.status != 'pending') {
         throw const ServerException(
           'Solo puedes proponer precio a solicitudes pendientes',
         );
@@ -86,6 +92,7 @@ class RequestRepositoryImpl implements RequestRepository {
         priceNote: priceNote,
       );
     } catch (e) {
+      if (e is ServerException) rethrow;
       throw ServerException(e.toString());
     }
   }
@@ -96,12 +103,29 @@ class RequestRepositoryImpl implements RequestRepository {
     String tripId,
   ) async {
     try {
-      final response = await supabaseClient.rpc(
-        'accept_proposed_trip_price',
-        params: {'p_request_id': requestId, 'p_trip_id': tripId},
-      );
-      return TripRequestModel.fromJson(Map<String, dynamic>.from(response));
+      final request = await remoteDatasource.getRequestById(requestId);
+      if (request.tripId != tripId) {
+        throw const ServerException('La solicitud no pertenece a este viaje');
+      }
+      if (request.status != 'price_proposed') {
+        throw const ServerException('Solo puedes aceptar un precio propuesto');
+      }
+
+      final trip = await tripDatasource.getTripById(tripId);
+      final requestedSeats = request.passengerCount;
+      if (trip.availableSeats < requestedSeats) {
+        throw const ServerException('No hay suficientes asientos disponibles');
+      }
+
+      final nextSeats = trip.availableSeats - requestedSeats;
+      await tripDatasource.updateTrip(tripId, {
+        'available_seats': nextSeats,
+        if (nextSeats == 0) 'status': 'full',
+      });
+
+      return await remoteDatasource.updateRequestStatus(requestId, 'accepted');
     } catch (e) {
+      if (e is ServerException) rethrow;
       throw ServerException(e.toString());
     }
   }
@@ -109,36 +133,23 @@ class RequestRepositoryImpl implements RequestRepository {
   @override
   Future<TripRequest> acceptRequest(String requestId, String tripId) async {
     try {
-      final requestResponse = await supabaseClient
-          .from('trip_requests')
-          .select('passenger_count')
-          .eq('id', requestId)
-          .eq('trip_id', tripId)
-          .single();
-      final requestedSeats = requestResponse['passenger_count'] as int? ?? 1;
-      final tripResponse = await supabaseClient
-          .from('trips')
-          .select('available_seats')
-          .eq('id', tripId)
-          .single();
-      final currentSeats = tripResponse['available_seats'] as int;
-      if (currentSeats < requestedSeats) {
+      final request = await remoteDatasource.getRequestById(requestId);
+      if (request.tripId != tripId) {
+        throw const ServerException('La solicitud no pertenece a este viaje');
+      }
+      final requestedSeats = request.passengerCount;
+      final trip = await tripDatasource.getTripById(tripId);
+      if (trip.availableSeats < requestedSeats) {
         throw const ServerException('No hay suficientes asientos disponibles');
       }
-      final nextSeats = currentSeats - requestedSeats;
-      await supabaseClient
-          .from('trips')
-          .update({
-            'available_seats': nextSeats,
-            if (nextSeats == 0) 'status': 'full',
-          })
-          .eq('id', tripId);
-      final request = await remoteDatasource.updateRequestStatus(
-        requestId,
-        'accepted',
-      );
-      return request;
+      final nextSeats = trip.availableSeats - requestedSeats;
+      await tripDatasource.updateTrip(tripId, {
+        'available_seats': nextSeats,
+        if (nextSeats == 0) 'status': 'full',
+      });
+      return await remoteDatasource.updateRequestStatus(requestId, 'accepted');
     } catch (e) {
+      if (e is ServerException) rethrow;
       throw ServerException(e.toString());
     }
   }
@@ -148,6 +159,62 @@ class RequestRepositoryImpl implements RequestRepository {
     try {
       return await remoteDatasource.updateRequestStatus(requestId, 'rejected');
     } catch (e) {
+      throw ServerException(e.toString());
+    }
+  }
+
+  @override
+  Future<TripRequest> cancelRequest(String requestId) async {
+    try {
+      final request = await remoteDatasource.getRequestById(requestId);
+      const cancellableStatuses = {'pending', 'accepted', 'price_proposed'};
+      if (!cancellableStatuses.contains(request.status)) {
+        throw const ServerException('Esta solicitud ya no se puede cancelar');
+      }
+
+      if (request.status == 'accepted') {
+        try {
+          final trip = await tripDatasource.getTripById(request.tripId);
+          final restoredSeats = (trip.availableSeats + request.passengerCount)
+              .clamp(0, trip.totalSeats);
+          await tripDatasource.updateTrip(request.tripId, {
+            'available_seats': restoredSeats,
+            if (trip.status == 'full') 'status': 'active',
+          });
+        } catch (_) {
+          // Seat restore is best-effort; cancel must still succeed.
+        }
+      }
+
+      // Appwrite enum historically lacked `cancelled`. Prefer status update,
+      // fall back to deleting the document so cancel always works.
+      try {
+        return await remoteDatasource.updateRequestStatus(
+          requestId,
+          'cancelled',
+        );
+      } catch (_) {
+        await remoteDatasource.deleteRequest(requestId);
+        return TripRequest(
+          id: request.id,
+          tripId: request.tripId,
+          passengerId: request.passengerId,
+          status: 'cancelled',
+          passengerCount: request.passengerCount,
+          pickupNote: request.pickupNote,
+          dropoffNote: request.dropoffNote,
+          pickupLatitude: request.pickupLatitude,
+          pickupLongitude: request.pickupLongitude,
+          dropoffLatitude: request.dropoffLatitude,
+          dropoffLongitude: request.dropoffLongitude,
+          stops: request.stops,
+          proposedPrice: request.proposedPrice,
+          priceNote: request.priceNote,
+          createdAt: request.createdAt,
+        );
+      }
+    } catch (e) {
+      if (e is ServerException) rethrow;
       throw ServerException(e.toString());
     }
   }

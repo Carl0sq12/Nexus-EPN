@@ -66,5 +66,15 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Nexus Campus necesita tu ubicación para mostrar el mapa y enviar alertas SOS.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Nexus Campus usa tu ubicación durante la navegación del viaje.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Nexus Campus necesita la cámara para fotos de perfil y vehículo.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Nexus Campus necesita acceso a tus fotos para perfil y vehículo.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Nexus Campus usa Face ID para iniciar sesión de forma segura.</string>
 </dict>
 </plist>

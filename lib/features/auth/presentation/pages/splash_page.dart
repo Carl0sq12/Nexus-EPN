@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/constants/app_text_styles.dart';
 import '../../../../core/constants/app_strings.dart';
+import '../../../../core/widgets/custom_button.dart';
 import '../../../onboarding/domain/entities/onboarding_status.dart';
 import '../../../onboarding/presentation/providers/onboarding_provider.dart';
 
@@ -19,16 +20,15 @@ class SplashPage extends ConsumerWidget {
     onboardingState.when(
       data: (status) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!context.mounted) return;
           context.go(_routeForStep(status.step));
         });
       },
       loading: () {},
-      error: (e, st) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          context.go(AppStrings.routeLogin);
-        });
-      },
+      error: (_, __) {},
     );
+
+    final hasError = onboardingState.hasError;
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -62,11 +62,31 @@ class SplashPage extends ConsumerWidget {
               ),
             ),
             const SizedBox(height: 48),
-            const SizedBox(
-              width: 24,
-              height: 24,
-              child: CircularProgressIndicator(strokeWidth: 2.5),
-            ),
+            if (hasError) ...[
+              Text(
+                'No se pudo cargar tu sesión.',
+                style: AppTextStyles.bodyMedium.copyWith(
+                  color: AppColors.textSecondary,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              CustomButton(
+                label: 'Reintentar',
+                onPressed: () => ref.invalidate(onboardingStatusProvider),
+              ),
+              const SizedBox(height: 8),
+              CustomButton(
+                label: 'Ir al login',
+                isOutlined: true,
+                onPressed: () => context.go(AppStrings.routeLogin),
+              ),
+            ] else
+              const SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2.5),
+              ),
           ],
         ),
       ),
@@ -84,6 +104,8 @@ String _routeForStep(OnboardingStep step) {
       return AppStrings.routeOnboardingProfile;
     case OnboardingStep.registerVehicle:
       return AppStrings.routeOnboardingVehicle;
+    case OnboardingStep.vehiclePending:
+      return AppStrings.routeOnboardingVehiclePending;
     case OnboardingStep.registerContacts:
       return AppStrings.routeOnboardingContacts;
     case OnboardingStep.home:

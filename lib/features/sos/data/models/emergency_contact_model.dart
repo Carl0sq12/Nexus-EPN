@@ -11,13 +11,14 @@ class EmergencyContactModel extends EmergencyContact {
   });
 
   factory EmergencyContactModel.fromJson(Map<String, dynamic> json) {
+    final createdRaw = json['created_at'] ?? json[r'$createdAt'];
     return EmergencyContactModel(
-      id: json['id'] as String,
+      id: (json['id'] ?? json[r'$id']) as String,
       userId: json['user_id'] as String,
       name: json['name'] as String,
       phone: json['phone'] as String,
       relationship: json['relationship'] as String?,
-      createdAt: DateTime.parse(json['created_at'] as String),
+      createdAt: DateTime.parse(createdRaw as String),
     );
   }
 

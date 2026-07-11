@@ -39,4 +39,13 @@ class ProfileRepositoryImpl implements ProfileRepository {
       throw ServerFailure(e.toString());
     }
   }
+
+  @override
+  Future<Profile?> findByPhone(String phone) async {
+    try {
+      return await datasource.findByPhone(phone);
+    } catch (e) {
+      throw ServerFailure(e.toString());
+    }
+  }
 }

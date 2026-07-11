@@ -3,7 +3,7 @@ import '../../domain/entities/message.dart';
 import '../../domain/repositories/chat_repository.dart';
 import '../datasources/chat_remote_datasource.dart';
 
-/// Implementation of [ChatRepository] using Supabase.
+/// Implementation of [ChatRepository] using Appwrite.
 class ChatRepositoryImpl implements ChatRepository {
   final ChatRemoteDatasource remoteDatasource;
 
@@ -26,6 +26,24 @@ class ChatRepositoryImpl implements ChatRepository {
   ) async {
     try {
       return await remoteDatasource.sendMessage(tripId, senderId, content);
+    } catch (e) {
+      throw ServerException(e.toString());
+    }
+  }
+
+  @override
+  Future<Message> sendSystemMessage(String tripId, String content) async {
+    try {
+      return await remoteDatasource.sendSystemMessage(tripId, content);
+    } catch (e) {
+      throw ServerException(e.toString());
+    }
+  }
+
+  @override
+  Future<int> deleteMessagesForTrip(String tripId) async {
+    try {
+      return await remoteDatasource.deleteMessagesForTrip(tripId);
     } catch (e) {
       throw ServerException(e.toString());
     }

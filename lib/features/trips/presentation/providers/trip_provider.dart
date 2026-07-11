@@ -1,6 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../../core/providers/supabase_provider.dart';
-import '../../../../core/usecase/usecase.dart';
+import '../../../../core/providers/appwrite_provider.dart';
 import '../../domain/entities/trip.dart';
 import '../../domain/usecases/get_available_trips_usecase.dart';
 import '../../domain/usecases/get_my_trips_usecase.dart';
@@ -9,10 +8,11 @@ import '../../domain/usecases/update_trip_usecase.dart';
 import '../../domain/usecases/delete_trip_usecase.dart';
 import '../../data/datasources/trip_remote_datasource.dart';
 import '../../data/repositories/trip_repository_impl.dart';
+import '../../../../core/usecase/usecase.dart';
 
 /// Provider for the trip remote datasource.
 final tripDatasourceProvider = Provider<TripRemoteDatasource>((ref) {
-  return TripRemoteDatasource(ref.watch(supabaseClientProvider));
+  return TripRemoteDatasource(ref.watch(databasesProvider));
 });
 
 /// Provider for the trip repository.
@@ -59,6 +59,7 @@ class TripNotifier extends StateNotifier<AsyncValue<void>> {
     double? destinationLongitude,
     double? routeDistanceMeters,
     double? routeDurationSeconds,
+    String? routePoints,
   }) async {
     state = const AsyncValue.loading();
     try {
@@ -77,6 +78,7 @@ class TripNotifier extends StateNotifier<AsyncValue<void>> {
           destinationLongitude: destinationLongitude,
           routeDistanceMeters: routeDistanceMeters,
           routeDurationSeconds: routeDurationSeconds,
+          routePoints: routePoints,
         ),
       );
       ref.invalidate(availableTripsProvider);

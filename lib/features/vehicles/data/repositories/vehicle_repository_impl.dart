@@ -26,6 +26,7 @@ class VehicleRepositoryImpl implements VehicleRepository {
     String model,
     String color,
     String plate,
+    String? licensePhotoUrl,
   ) async {
     try {
       return await datasource.createVehicle(
@@ -34,6 +35,7 @@ class VehicleRepositoryImpl implements VehicleRepository {
         model,
         color,
         plate,
+        licensePhotoUrl,
       );
     } catch (e) {
       throw ServerFailure(e.toString());
@@ -53,9 +55,47 @@ class VehicleRepositoryImpl implements VehicleRepository {
   }
 
   @override
-  Future<String> uploadVehiclePhoto(String vehicleId, File file) async {
+  Future<String> uploadVehiclePhoto(
+    String vehicleId,
+    File file, {
+    String? previousUrl,
+    String? ownerUserId,
+  }) async {
     try {
-      return await datasource.uploadVehiclePhoto(vehicleId, file);
+      return await datasource.uploadVehiclePhoto(
+        vehicleId,
+        file,
+        previousUrl: previousUrl,
+        ownerUserId: ownerUserId,
+      );
+    } catch (e) {
+      throw ServerFailure(e.toString());
+    }
+  }
+
+  @override
+  Future<String> uploadLicensePhoto(
+    String vehicleId,
+    File file, {
+    String? previousUrl,
+    String? ownerUserId,
+  }) async {
+    try {
+      return await datasource.uploadLicensePhoto(
+        vehicleId,
+        file,
+        previousUrl: previousUrl,
+        ownerUserId: ownerUserId,
+      );
+    } catch (e) {
+      throw ServerFailure(e.toString());
+    }
+  }
+
+  @override
+  Future<void> deleteVehicle(String vehicleId) async {
+    try {
+      await datasource.deleteVehicle(vehicleId);
     } catch (e) {
       throw ServerFailure(e.toString());
     }

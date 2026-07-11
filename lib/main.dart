@@ -1,35 +1,44 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'app.dart';
+import 'core/network/appwrite_client.dart';
 
-/// Entrypoint del aplicativo. Inicializa Supabase y arranca la app.
+/// Entrypoint del aplicativo. Inicializa Appwrite y arranca la app.
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  FlutterError.onError = (details) {
+    FlutterError.presentError(details);
+    debugPrint('FlutterError: ${details.exceptionAsString()}');
+  };
+  PlatformDispatcher.instance.onError = (error, stack) {
+    debugPrint('Uncaught async error: $error\n$stack');
+    return true;
+  };
+
   try {
-    await dotenv.load(fileName: '.env');
-    final supabaseUrl = dotenv.env['SUPABASE_URL'];
-    final supabaseAnonKey = dotenv.env['SUPABASE_ANON_KEY'];
-    if (supabaseUrl == null || supabaseAnonKey == null) {
+    // Prefer assets/env (incluido en el APK). Fallback a .env local en debug.
+    var loaded = false;
+    for (final fileName in ['assets/env/appwrite.env', '.env']) {
+      try {
+        await dotenv.load(fileName: fileName);
+        loaded = true;
+        break;
+      } catch (_) {
+        // try next
+      }
+    }
+    if (!loaded) {
       throw Exception(
-        'Faltan SUPABASE_URL o SUPABASE_ANON_KEY en el archivo .env',
+        'No se pudo cargar la configuracion. Falta assets/env/appwrite.env',
       );
     }
-    await Supabase.initialize(
-      url: supabaseUrl,
-      publishableKey: supabaseAnonKey,
-      authOptions: const FlutterAuthClientOptions(
-        // Evita el error de code_verifier cuando el link de confirmación/recovery
-        // se abre en un navegador distinto al dispositivo donde se generó el
-        // signUp/resetPassword.
-        authFlowType: AuthFlowType.implicit,
-      ),
-    );
+    AppwriteClientHolder.init();
     runApp(const ProviderScope(child: NexusCampusApp()));
   } catch (e, stackTrace) {
-    // Si algo falla acá (falta el .env, mala config, etc.)
-    // esto es justo lo que antes te dejaba pantalla negra sin explicación.
     debugPrint('Error inicializando la app: $e');
     debugPrint('$stackTrace');
     runApp(_ErrorApp(error: e.toString()));

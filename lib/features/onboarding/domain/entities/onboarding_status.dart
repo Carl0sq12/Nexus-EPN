@@ -5,6 +5,7 @@ enum OnboardingStep {
   verifyEmail,
   completeProfile,
   registerVehicle,
+  vehiclePending,
   registerContacts,
   home,
 }
@@ -17,6 +18,7 @@ class OnboardingStatus extends Equatable {
   final bool hasVerifiedEmail;
   final bool hasCompleteProfile;
   final bool hasVehicle;
+  final bool isVehicleApproved;
   final int emergencyContactsCount;
 
   const OnboardingStatus({
@@ -25,6 +27,7 @@ class OnboardingStatus extends Equatable {
     required this.hasCompleteProfile,
     required this.hasVehicle,
     required this.emergencyContactsCount,
+    this.isVehicleApproved = false,
     this.userId,
     this.role,
   });
@@ -36,6 +39,7 @@ class OnboardingStatus extends Equatable {
       hasVerifiedEmail = false,
       hasCompleteProfile = false,
       hasVehicle = false,
+      isVehicleApproved = false,
       emergencyContactsCount = 0;
 
   bool get canEnterHome => step == OnboardingStep.home;
@@ -50,6 +54,7 @@ class OnboardingStatus extends Equatable {
     hasVerifiedEmail,
     hasCompleteProfile,
     hasVehicle,
+    isVehicleApproved,
     emergencyContactsCount,
   ];
 }

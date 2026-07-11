@@ -11,4 +11,11 @@ abstract class EmergencyContactsRepositoryContract {
   });
 
   Future<void> deleteContact(String contactId);
+
+  Future<EmergencyContact> updateContact({
+    required String contactId,
+    required String name,
+    required String phone,
+    String? relationship,
+  });
 }

@@ -10,6 +10,7 @@ class CreateVehicleParams extends Equatable {
   final String model;
   final String color;
   final String plate;
+  final String? licensePhotoUrl;
 
   const CreateVehicleParams({
     required this.driverId,
@@ -17,10 +18,18 @@ class CreateVehicleParams extends Equatable {
     required this.model,
     required this.color,
     required this.plate,
+    this.licensePhotoUrl,
   });
 
   @override
-  List<Object?> get props => [driverId, brand, model, color, plate];
+  List<Object?> get props => [
+    driverId,
+    brand,
+    model,
+    color,
+    plate,
+    licensePhotoUrl,
+  ];
 }
 
 /// Use case for creating a new vehicle.
@@ -37,6 +46,7 @@ class CreateVehicleUseCase implements UseCase<Vehicle, CreateVehicleParams> {
       params.model,
       params.color,
       params.plate,
+      params.licensePhotoUrl,
     );
   }
 }

@@ -1,5 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../../core/providers/supabase_provider.dart';
+import '../../../../core/providers/appwrite_provider.dart';
 import '../../domain/entities/rating.dart';
 import '../../domain/usecases/send_rating_usecase.dart';
 import '../../domain/usecases/get_ratings_usecase.dart';
@@ -8,7 +8,7 @@ import '../../data/repositories/rating_repository_impl.dart';
 
 /// Provider for the rating remote datasource.
 final ratingDatasourceProvider = Provider<RatingRemoteDatasource>((ref) {
-  return RatingRemoteDatasource(ref.watch(supabaseClientProvider));
+  return RatingRemoteDatasource(ref.watch(databasesProvider));
 });
 
 /// Provider for the rating repository.
@@ -32,6 +32,14 @@ final ratingsForUserProvider = FutureProvider.family<List<Rating>, String>((
   userId,
 ) {
   return ref.read(ratingRepositoryProvider).getRatingsForUser(userId);
+});
+
+/// Ratings submitted for a specific trip.
+final ratingsForTripProvider = FutureProvider.family<List<Rating>, String>((
+  ref,
+  tripId,
+) {
+  return ref.read(ratingRepositoryProvider).getRatingsForTrip(tripId);
 });
 
 /// State notifier that manages sending a rating.
@@ -59,6 +67,7 @@ class RatingNotifier extends StateNotifier<AsyncValue<void>> {
         ),
       );
       ref.invalidate(ratingsForUserProvider(ratedUserId));
+      ref.invalidate(ratingsForTripProvider(tripId));
       state = const AsyncValue.data(null);
     } catch (e, st) {
       state = AsyncValue.error(e, st);

@@ -25,6 +25,7 @@ abstract class TripRepository {
     double? destinationLongitude,
     double? routeDistanceMeters,
     double? routeDurationSeconds,
+    String? routePoints,
   });
 
   /// Updates specific [fields] for the trip identified by [tripId].

@@ -9,6 +9,7 @@ import '../../../../core/constants/app_text_styles.dart';
 import '../../../../core/widgets/custom_button.dart';
 import '../../../../core/widgets/loading_widget.dart';
 import '../../../map/presentation/providers/map_provider.dart';
+import '../../../profile/presentation/providers/profile_provider.dart';
 import '../../domain/entities/trip_request.dart';
 import '../providers/request_provider.dart';
 import '../../../trips/presentation/providers/trip_provider.dart';
@@ -72,22 +73,15 @@ class RequestManagementPage extends ConsumerWidget {
                 ),
                 const SizedBox(height: 16),
                 _RequestSection(
-                  title: 'Por cotizar',
+                  title: 'Pendientes',
                   emptyText: AppStrings.noPendingRequests,
                   requests: pending,
                   color: AppColors.warning,
                   isBusy: requestState.isLoading,
-                  onProposePrice: (request) async {
-                    final proposal = await _PriceProposalDialog.show(context);
-                    if (proposal == null) return;
+                  onAccept: (request) async {
                     await ref
                         .read(requestNotifierProvider.notifier)
-                        .proposePrice(
-                          request.id,
-                          tripId,
-                          proposedPrice: proposal.price,
-                          priceNote: proposal.note,
-                        );
+                        .acceptRequest(request.id, tripId);
                     if (!context.mounted) return;
                     final nextState = ref.read(requestNotifierProvider);
                     ScaffoldMessenger.of(context).showSnackBar(
@@ -95,7 +89,7 @@ class RequestManagementPage extends ConsumerWidget {
                         content: Text(
                           nextState.hasError
                               ? nextState.error.toString()
-                              : 'Precio enviado al pasajero',
+                              : AppStrings.requestAccepted,
                         ),
                       ),
                     );
@@ -103,8 +97,11 @@ class RequestManagementPage extends ConsumerWidget {
                   onReject: (request) async {
                     await ref
                         .read(requestNotifierProvider.notifier)
-                        .rejectRequest(request.id);
-                    ref.invalidate(requestsByTripProvider(tripId));
+                        .rejectRequest(
+                          request.id,
+                          tripId: tripId,
+                          passengerId: request.passengerId,
+                        );
                     if (!context.mounted) return;
                     final nextState = ref.read(requestNotifierProvider);
                     ScaffoldMessenger.of(context).showSnackBar(
@@ -246,7 +243,7 @@ class _RequestSection extends StatelessWidget {
   final List<TripRequest> requests;
   final Color color;
   final bool isBusy;
-  final Future<void> Function(TripRequest request)? onProposePrice;
+  final Future<void> Function(TripRequest request)? onAccept;
   final Future<void> Function(TripRequest request)? onReject;
 
   const _RequestSection({
@@ -255,7 +252,7 @@ class _RequestSection extends StatelessWidget {
     required this.requests,
     required this.color,
     required this.isBusy,
-    this.onProposePrice,
+    this.onAccept,
     this.onReject,
   });
 
@@ -298,9 +295,7 @@ class _RequestSection extends StatelessWidget {
                 request: request,
                 color: color,
                 isBusy: isBusy,
-                onProposePrice: onProposePrice == null
-                    ? null
-                    : () => onProposePrice!(request),
+                onAccept: onAccept == null ? null : () => onAccept!(request),
                 onReject: onReject == null ? null : () => onReject!(request),
               ),
             ),
@@ -314,19 +309,33 @@ class _RequestCard extends ConsumerWidget {
   final TripRequest request;
   final Color color;
   final bool isBusy;
-  final Future<void> Function()? onProposePrice;
+  final Future<void> Function()? onAccept;
   final Future<void> Function()? onReject;
 
   const _RequestCard({
     required this.request,
     required this.color,
     required this.isBusy,
-    this.onProposePrice,
+    this.onAccept,
     this.onReject,
   });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final passengerAsync = ref.watch(profileProvider(request.passengerId));
+    final passengerName = passengerAsync.maybeWhen(
+      data: (profile) => profile.fullName.trim().isEmpty
+          ? 'Pasajero'
+          : profile.fullName.trim(),
+      orElse: () => 'Pasajero',
+    );
+    final initials = passengerName
+        .split(' ')
+        .where((w) => w.isNotEmpty)
+        .take(2)
+        .map((w) => w[0].toUpperCase())
+        .join();
+
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(12),
@@ -343,16 +352,14 @@ class _RequestCard extends ConsumerWidget {
                 radius: 18,
                 backgroundColor: color.withValues(alpha: 0.16),
                 child: Text(
-                  request.passengerId.isNotEmpty
-                      ? request.passengerId[0].toUpperCase()
-                      : '?',
+                  initials.isNotEmpty ? initials : '?',
                   style: AppTextStyles.labelMedium.copyWith(color: color),
                 ),
               ),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  '${AppStrings.passengerLabel}: ${request.passengerId}',
+                  passengerName,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: AppTextStyles.bodyMedium,
@@ -384,7 +391,8 @@ class _RequestCard extends ConsumerWidget {
               value: request.pickupNote!,
             ),
           ],
-          if ((request.dropoffNote ?? '').trim().isNotEmpty) ...[
+          if ((request.dropoffNote ?? '').trim().isNotEmpty &&
+              request.dropoffNote != request.pickupNote) ...[
             const SizedBox(height: 8),
             _RequestNote(
               label: 'Destino / parada final',
@@ -401,17 +409,17 @@ class _RequestCard extends ConsumerWidget {
             const SizedBox(height: 10),
             _RequestStopsMap(request: request),
           ],
-          if (onProposePrice != null || onReject != null) ...[
+          if (onAccept != null || onReject != null) ...[
             const SizedBox(height: 12),
             Wrap(
               spacing: 8,
               runSpacing: 8,
               children: [
                 CustomButton(
-                  label: 'Proponer precio',
-                  width: 170,
+                  label: AppStrings.accept,
+                  width: 120,
                   isLoading: isBusy,
-                  onPressed: isBusy ? null : () async => onProposePrice?.call(),
+                  onPressed: isBusy ? null : () async => onAccept?.call(),
                 ),
                 CustomButton(
                   label: AppStrings.reject,
@@ -662,106 +670,6 @@ class _RequestNote extends StatelessWidget {
         ),
         const SizedBox(height: 2),
         Text(value, style: AppTextStyles.bodySmall),
-      ],
-    );
-  }
-}
-
-class _PriceProposalResult {
-  final double price;
-  final String? note;
-
-  const _PriceProposalResult({required this.price, this.note});
-}
-
-class _PriceProposalDialog extends StatefulWidget {
-  const _PriceProposalDialog();
-
-  static Future<_PriceProposalResult?> show(BuildContext context) {
-    return showDialog<_PriceProposalResult>(
-      context: context,
-      builder: (_) => const _PriceProposalDialog(),
-    );
-  }
-
-  @override
-  State<_PriceProposalDialog> createState() => _PriceProposalDialogState();
-}
-
-class _PriceProposalDialogState extends State<_PriceProposalDialog> {
-  final _formKey = GlobalKey<FormState>();
-  final _priceController = TextEditingController();
-  final _noteController = TextEditingController();
-
-  @override
-  void dispose() {
-    _priceController.dispose();
-    _noteController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Proponer precio al pasajero'),
-      content: Form(
-        key: _formKey,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextFormField(
-              controller: _priceController,
-              keyboardType: const TextInputType.numberWithOptions(
-                decimal: true,
-              ),
-              decoration: const InputDecoration(
-                labelText: 'Precio por asiento para esta solicitud',
-                prefixText: '\$ ',
-              ),
-              validator: (value) {
-                final price = double.tryParse(
-                  (value ?? '').replaceAll(',', '.'),
-                );
-                if (price == null || price <= 0) {
-                  return 'Ingresa un precio válido';
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _noteController,
-              maxLines: 2,
-              decoration: const InputDecoration(
-                labelText: 'Nota para el pasajero',
-                hintText: 'Ej: Incluye las paradas indicadas',
-              ),
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text(AppStrings.cancel),
-        ),
-        TextButton(
-          onPressed: () {
-            if (!_formKey.currentState!.validate()) return;
-            final price = double.parse(
-              _priceController.text.trim().replaceAll(',', '.'),
-            );
-            final note = _noteController.text.trim();
-            Navigator.pop(
-              context,
-              _PriceProposalResult(
-                price: price,
-                note: note.isEmpty ? null : note,
-              ),
-            );
-          },
-          child: const Text('Enviar'),
-        ),
       ],
     );
   }

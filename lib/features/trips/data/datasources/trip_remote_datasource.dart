@@ -1,25 +1,33 @@
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:appwrite/appwrite.dart';
+
+import '../../../../core/config/appwrite_config.dart';
 import '../../../../core/errors/exceptions.dart';
+import '../../../../core/network/appwrite_helpers.dart';
 import '../models/trip_model.dart';
 
-/// Remote datasource for trip operations using Supabase.
+/// Remote datasource for trip operations using Appwrite Databases.
 class TripRemoteDatasource {
-  final SupabaseClient client;
+  final Databases databases;
 
-  const TripRemoteDatasource(this.client);
+  const TripRemoteDatasource(this.databases);
+
+  String get _db => AppwriteConfig.databaseId;
+  String get _col => AppwriteConfig.collectionTrips;
 
   Future<List<TripModel>> getAvailableTrips() async {
     try {
-      final response = await client
-          .from('trips')
-          .select()
-          .eq('status', 'active')
-          .gt('available_seats', 0)
-          .order('departure_time');
-      final list = (response as List)
-          .map((e) => TripModel.fromJson(Map<String, dynamic>.from(e)))
+      final response = await databases.listDocuments(
+        databaseId: _db,
+        collectionId: _col,
+        queries: [
+          Query.equal('status', 'active'),
+          Query.greaterThan('available_seats', 0),
+          Query.orderAsc('departure_time'),
+        ],
+      );
+      return response.documents
+          .map((d) => TripModel.fromJson(normalizeDocument(d)))
           .toList();
-      return list;
     } catch (e) {
       throw ServerException(e.toString());
     }
@@ -27,15 +35,17 @@ class TripRemoteDatasource {
 
   Future<List<TripModel>> getMyTrips(String driverId) async {
     try {
-      final response = await client
-          .from('trips')
-          .select()
-          .eq('driver_id', driverId)
-          .order('departure_time');
-      final list = (response as List)
-          .map((e) => TripModel.fromJson(Map<String, dynamic>.from(e)))
+      final response = await databases.listDocuments(
+        databaseId: _db,
+        collectionId: _col,
+        queries: [
+          Query.equal('driver_id', driverId),
+          Query.orderAsc('departure_time'),
+        ],
+      );
+      return response.documents
+          .map((d) => TripModel.fromJson(normalizeDocument(d)))
           .toList();
-      return list;
     } catch (e) {
       throw ServerException(e.toString());
     }
@@ -43,12 +53,12 @@ class TripRemoteDatasource {
 
   Future<TripModel> getTripById(String tripId) async {
     try {
-      final response = await client
-          .from('trips')
-          .select()
-          .eq('id', tripId)
-          .single();
-      return TripModel.fromJson(response);
+      final doc = await databases.getDocument(
+        databaseId: _db,
+        collectionId: _col,
+        documentId: tripId,
+      );
+      return TripModel.fromJson(normalizeDocument(doc));
     } catch (e) {
       throw ServerException(e.toString());
     }
@@ -67,29 +77,39 @@ class TripRemoteDatasource {
     double? destinationLongitude,
     double? routeDistanceMeters,
     double? routeDurationSeconds,
+    String? routePoints,
   }) async {
     try {
-      final response = await client
-          .from('trips')
-          .insert({
-            'driver_id': driverId,
-            'origin': origin,
-            'destination': destination,
-            'departure_time': departureTime.toIso8601String(),
-            'total_seats': totalSeats,
-            'available_seats': totalSeats,
-            'price_per_seat': pricePerSeat,
-            'status': 'active',
-            'origin_latitude': originLatitude,
-            'origin_longitude': originLongitude,
-            'destination_latitude': destinationLatitude,
-            'destination_longitude': destinationLongitude,
-            'route_distance_meters': routeDistanceMeters,
-            'route_duration_seconds': routeDurationSeconds,
-          })
-          .select()
-          .single();
-      return TripModel.fromJson(response);
+      final data = <String, dynamic>{
+        'driver_id': driverId,
+        'origin': origin,
+        'destination': destination,
+        'departure_time': departureTime.toUtc().toIso8601String(),
+        'total_seats': totalSeats,
+        'available_seats': totalSeats,
+        'price_per_seat': pricePerSeat,
+        'status': 'active',
+        if (originLatitude != null) 'origin_latitude': originLatitude,
+        if (originLongitude != null) 'origin_longitude': originLongitude,
+        if (destinationLatitude != null)
+          'destination_latitude': destinationLatitude,
+        if (destinationLongitude != null)
+          'destination_longitude': destinationLongitude,
+        if (routeDistanceMeters != null)
+          'route_distance_meters': routeDistanceMeters,
+        if (routeDurationSeconds != null)
+          'route_duration_seconds': routeDurationSeconds,
+        if (routePoints != null) 'route_points': routePoints,
+      };
+
+      final doc = await databases.createDocument(
+        databaseId: _db,
+        collectionId: _col,
+        documentId: ID.unique(),
+        data: data,
+        permissions: tripDocumentPermissions(driverId),
+      );
+      return TripModel.fromJson(normalizeDocument(doc));
     } catch (e) {
       throw ServerException(e.toString());
     }
@@ -100,13 +120,13 @@ class TripRemoteDatasource {
     Map<String, dynamic> fields,
   ) async {
     try {
-      final response = await client
-          .from('trips')
-          .update(fields)
-          .eq('id', tripId)
-          .select()
-          .single();
-      return TripModel.fromJson(response);
+      final doc = await databases.updateDocument(
+        databaseId: _db,
+        collectionId: _col,
+        documentId: tripId,
+        data: fields,
+      );
+      return TripModel.fromJson(normalizeDocument(doc));
     } catch (e) {
       throw ServerException(e.toString());
     }
@@ -114,10 +134,12 @@ class TripRemoteDatasource {
 
   Future<void> deleteTrip(String tripId) async {
     try {
-      await client
-          .from('trips')
-          .update({'status': 'cancelled'})
-          .eq('id', tripId);
+      await databases.updateDocument(
+        databaseId: _db,
+        collectionId: _col,
+        documentId: tripId,
+        data: {'status': 'cancelled'},
+      );
     } catch (e) {
       throw ServerException(e.toString());
     }

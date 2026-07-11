@@ -7,7 +7,7 @@ import 'package:intl/intl.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/constants/app_strings.dart';
 import '../../../../core/constants/app_text_styles.dart';
-import '../../../../core/providers/supabase_provider.dart';
+import '../../../../core/providers/appwrite_provider.dart';
 import '../../../../core/widgets/custom_button.dart';
 import '../../../../core/widgets/loading_widget.dart';
 import '../../domain/entities/trip.dart';
@@ -20,7 +20,7 @@ class MyTripsPage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final authState = ref.watch(authStateProvider);
-    final userId = authState.value?.session?.user.id;
+    final userId = authState.value?.userId;
     final notifierState = ref.watch(tripNotifierProvider);
 
     ref.listen(tripNotifierProvider, (previous, next) {
@@ -80,6 +80,9 @@ class MyTripsPage extends ConsumerWidget {
                                 context.push('/trips/${trips[index].id}'),
                             onRequests: () => context.push(
                               '/trips/${trips[index].id}/requests',
+                            ),
+                            onReport: () => context.push(
+                              '/trips/${trips[index].id}/report',
                             ),
                             onEdit: () =>
                                 _showEditTripDialog(context, ref, trips[index]),
@@ -262,6 +265,7 @@ class _MyTripCard extends StatelessWidget {
   final bool isBusy;
   final VoidCallback onDetails;
   final VoidCallback onRequests;
+  final VoidCallback onReport;
   final VoidCallback onEdit;
   final VoidCallback onCancel;
 
@@ -270,6 +274,7 @@ class _MyTripCard extends StatelessWidget {
     required this.isBusy,
     required this.onDetails,
     required this.onRequests,
+    required this.onReport,
     required this.onEdit,
     required this.onCancel,
   });
@@ -280,8 +285,8 @@ class _MyTripCard extends StatelessWidget {
       'dd MMM yyyy · HH:mm',
     ).format(trip.departureTime);
     final canModify =
-        trip.status != AppStrings.statusCancelled &&
-        trip.status != AppStrings.statusCompleted;
+        trip.status == AppStrings.statusActive ||
+        trip.status == AppStrings.statusFull;
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -351,6 +356,13 @@ class _MyTripCard extends StatelessWidget {
                 isOutlined: true,
                 onPressed: onDetails,
               ),
+              if (trip.status == AppStrings.statusCompleted)
+                CustomButton(
+                  label: 'Reporte',
+                  width: 110,
+                  isOutlined: true,
+                  onPressed: onReport,
+                ),
               CustomButton(
                 label: AppStrings.edit,
                 width: 110,
