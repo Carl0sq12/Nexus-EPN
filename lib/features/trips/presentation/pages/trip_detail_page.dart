@@ -11,9 +11,11 @@ import '../../../../core/constants/app_text_styles.dart';
 import '../../../../core/constants/app_strings.dart';
 import '../../../../core/providers/appwrite_provider.dart';
 import '../../../../core/utils/geo_fare.dart';
+import '../../../../core/widgets/app_snackbar.dart';
 import '../../../../core/widgets/custom_button.dart';
 import '../../../../core/widgets/loading_widget.dart';
 import '../../../map/presentation/providers/map_provider.dart';
+import '../../../notifications/presentation/providers/notification_provider.dart';
 import '../../../requests/domain/entities/trip_request.dart';
 import '../../../requests/presentation/providers/request_provider.dart';
 import '../../domain/entities/trip.dart';
@@ -37,28 +39,30 @@ class _TripDetailPageState extends ConsumerState<TripDetailPage> {
 
   Future<void> _markStopOnRoute(LatLng point, List<LatLng> routePoints) async {
     if (_pendingStops.length >= _passengerCount) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
+      showAppSnackBar(
+        context,
+        title: 'Límite de paradas alcanzado',
+        message:
             'Ya marcaste $_passengerCount parada(s). Quita una para cambiarla.',
-          ),
-        ),
+        type: AppSnackBarType.info,
       );
       return;
     }
     if (routePoints.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('La ruta aún se está cargando')),
+      showAppSnackBar(
+        context,
+        title: 'Ruta cargando',
+        message: 'Espera unos segundos antes de marcar tu parada.',
+        type: AppSnackBarType.info,
       );
       return;
     }
     if (!RouteGeometry.isNearRoute(point, routePoints)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Toca sobre la línea azul de la ruta para marcar tu parada',
-          ),
-        ),
+      showAppSnackBar(
+        context,
+        title: 'Parada fuera de ruta',
+        message: 'Toca sobre la línea azul para marcar tu parada.',
+        type: AppSnackBarType.warning,
       );
       return;
     }
@@ -85,26 +89,30 @@ class _TripDetailPageState extends ConsumerState<TripDetailPage> {
 
   Future<void> _sendRequest(Trip trip, String userId) async {
     if (_pendingStops.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Primero marca tu parada tocando la ruta en el mapa'),
-        ),
+      showAppSnackBar(
+        context,
+        title: 'Marca tu parada',
+        message: 'Primero toca la ruta en el mapa para elegir tu punto.',
+        type: AppSnackBarType.warning,
       );
       return;
     }
     if (_pendingStops.length < _passengerCount) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Marca ${_passengerCount - _pendingStops.length} parada(s) más antes de enviar',
-          ),
-        ),
+      showAppSnackBar(
+        context,
+        title: 'Faltan paradas',
+        message:
+            'Marca ${_passengerCount - _pendingStops.length} parada(s) más antes de enviar.',
+        type: AppSnackBarType.warning,
       );
       return;
     }
     if (_passengerCount > trip.availableSeats) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No hay suficientes cupos disponibles')),
+      showAppSnackBar(
+        context,
+        title: 'Cupos insuficientes',
+        message: 'Este viaje ya no tiene suficientes asientos disponibles.',
+        type: AppSnackBarType.warning,
       );
       return;
     }
@@ -129,17 +137,23 @@ class _TripDetailPageState extends ConsumerState<TripDetailPage> {
     if (!mounted) return;
     final state = ref.read(requestNotifierProvider);
     if (state.hasError) {
-      ScaffoldMessenger.of(
+      showAppSnackBar(
         context,
-      ).showSnackBar(SnackBar(content: Text(state.error.toString())));
+        title: 'No se envió la solicitud',
+        message: state.error.toString(),
+        type: AppSnackBarType.error,
+      );
       return;
     }
     setState(() {
       _pendingStops.clear();
       _passengerCount = 1;
     });
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Solicitud enviada al conductor')),
+    showAppSnackBar(
+      context,
+      title: 'Solicitud enviada',
+      message: 'El conductor recibirá tu solicitud y podrá aceptarla.',
+      type: AppSnackBarType.success,
     );
   }
 
@@ -210,6 +224,14 @@ class _TripDetailPageState extends ConsumerState<TripDetailPage> {
                   trip.status == AppStrings.statusActive &&
                   trip.availableSeats > 0 &&
                   requestForTrip == null;
+              final canPassengerNavigate =
+                  !isOwner &&
+                  requestForTrip?.status == AppStrings.statusAccepted &&
+                  trip.status == AppStrings.statusInProgress &&
+                  trip.originLatitude != null &&
+                  trip.originLongitude != null &&
+                  trip.destinationLatitude != null &&
+                  trip.destinationLongitude != null;
               final visibleStops = isOwner
                   ? (ownerRequestsAsync?.asData?.value ?? const <TripRequest>[])
                         .where(
@@ -277,12 +299,21 @@ class _TripDetailPageState extends ConsumerState<TripDetailPage> {
                     ],
                     const SizedBox(height: 24),
                     if (!isOwner && userId != null) ...[
-                      if (requestForTrip != null)
+                      if (requestForTrip != null) ...[
                         _PassengerRequestBanner(
                           request: requestForTrip,
                           passengerId: userId,
-                        )
-                      else if (canRequestSeat) ...[
+                        ),
+                        if (canPassengerNavigate) ...[
+                          const SizedBox(height: 12),
+                          CustomButton(
+                            label: 'Ver ruta en vivo',
+                            leadingIcon: Icons.navigation_outlined,
+                            onPressed: () =>
+                                context.push('/trips/${trip.id}/navigation'),
+                          ),
+                        ],
+                      ] else if (canRequestSeat) ...[
                         _PassengerSeatPicker(
                           seats: _passengerCount,
                           maxSeats: trip.availableSeats,
@@ -357,12 +388,12 @@ class _TripDetailPageState extends ConsumerState<TripDetailPage> {
                               ? () => _sendRequest(trip, userId)
                               : _pendingStops.length < _passengerCount
                               ? () {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(
-                                        'Marca ${_passengerCount - _pendingStops.length} parada(s) más en la ruta',
-                                      ),
-                                    ),
+                                  showAppSnackBar(
+                                    context,
+                                    title: 'Faltan paradas',
+                                    message:
+                                        'Marca ${_passengerCount - _pendingStops.length} parada(s) más en la ruta.',
+                                    type: AppSnackBarType.warning,
                                   );
                                 }
                               : null,
@@ -503,12 +534,45 @@ Future<void> _startTrip(
   final state = ref.read(tripNotifierProvider);
   if (!context.mounted) return;
   if (state.hasError) {
-    ScaffoldMessenger.of(
+    showAppSnackBar(
       context,
-    ).showSnackBar(SnackBar(content: Text(state.error.toString())));
+      title: 'No se inició el viaje',
+      message: state.error.toString(),
+      type: AppSnackBarType.error,
+    );
     return;
   }
+  await _notifyAcceptedPassengersTripStarted(ref, trip);
+  if (!context.mounted) return;
   context.push('/trips/${trip.id}/navigation');
+}
+
+Future<void> _notifyAcceptedPassengersTripStarted(
+  WidgetRef ref,
+  Trip trip,
+) async {
+  try {
+    final requests = await ref.read(requestsByTripProvider(trip.id).future);
+    final datasource = ref.read(notificationRemoteDatasourceProvider);
+    final notifiedPassengerIds = <String>{};
+    for (final request in requests) {
+      if (request.status != AppStrings.statusAccepted) continue;
+      if (!notifiedPassengerIds.add(request.passengerId)) continue;
+      try {
+        await datasource.create(
+          userId: request.passengerId,
+          title: 'Viaje iniciado',
+          body:
+              'El conductor inició la navegación hacia ${trip.destination}. Ya puedes ver la ruta del viaje.',
+          type: 'trip_navigation_started',
+          relatedId: trip.id,
+        );
+        ref.invalidate(notificationsProvider(request.passengerId));
+      } catch (_) {}
+    }
+  } catch (_) {
+    // La navegación del conductor no debe bloquearse por una notificación.
+  }
 }
 
 Future<void> _completeTrip(
@@ -524,12 +588,12 @@ Future<void> _completeTrip(
   );
   if (!nearDestination) {
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text(
-          'Debes estar cerca del destino para marcar el viaje como completado',
-        ),
-      ),
+    showAppSnackBar(
+      context,
+      title: 'Aún no llegas al destino',
+      message:
+          'Debes estar cerca del destino para marcar el viaje como completado.',
+      type: AppSnackBarType.warning,
     );
     return;
   }
@@ -538,15 +602,19 @@ Future<void> _completeTrip(
   if (!context.mounted) return;
   if (!ok) {
     final state = ref.read(tripNotifierProvider);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(state.error?.toString() ?? 'No se pudo completar'),
-      ),
+    showAppSnackBar(
+      context,
+      title: 'No se completó el viaje',
+      message: state.error?.toString() ?? 'No se pudo completar.',
+      type: AppSnackBarType.error,
     );
     return;
   }
-  ScaffoldMessenger.of(context).showSnackBar(
-    const SnackBar(content: Text('Viaje completado. Chat eliminado.')),
+  showAppSnackBar(
+    context,
+    title: 'Viaje completado',
+    message: 'El viaje finalizó correctamente y el chat fue eliminado.',
+    type: AppSnackBarType.success,
   );
   context.push('${AppStrings.routeTrips}/${trip.id}/report');
 }
@@ -656,14 +724,17 @@ class _PassengerRequestBanner extends ConsumerWidget {
                           );
                       if (!context.mounted) return;
                       final state = ref.read(requestNotifierProvider);
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            state.hasError
-                                ? state.error.toString()
-                                : 'Solicitud cancelada',
-                          ),
-                        ),
+                      showAppSnackBar(
+                        context,
+                        title: state.hasError
+                            ? 'No se canceló la solicitud'
+                            : 'Solicitud cancelada',
+                        message: state.hasError
+                            ? state.error.toString()
+                            : 'Tu solicitud fue retirada correctamente.',
+                        type: state.hasError
+                            ? AppSnackBarType.error
+                            : AppSnackBarType.success,
                       );
                     },
             ),

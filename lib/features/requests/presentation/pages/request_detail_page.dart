@@ -8,6 +8,7 @@ import '../../../../core/constants/app_strings.dart';
 import '../../../../core/constants/app_text_styles.dart';
 import '../../../../core/providers/appwrite_provider.dart';
 import '../../../../core/widgets/app_state_views.dart';
+import '../../../../core/widgets/app_snackbar.dart';
 import '../../../../core/widgets/custom_button.dart';
 import '../../../../core/widgets/loading_widget.dart';
 import '../../../notifications/presentation/providers/notification_provider.dart';
@@ -109,11 +110,11 @@ class _RequestDetailBody extends ConsumerWidget {
     final statusColor = _statusColor(request.status);
     final stopLabel = request.stops.isNotEmpty
         ? request.stops.first.label
-            .replaceFirst(RegExp(r'^Tu parada:\s*'), '')
-            .trim()
+              .replaceFirst(RegExp(r'^Tu parada:\s*'), '')
+              .trim()
         : (request.pickupNote?.trim().isNotEmpty ?? false)
-            ? request.pickupNote!.trim()
-            : 'Sin parada indicada';
+        ? request.pickupNote!.trim()
+        : 'Sin parada indicada';
     final routeLabel = trip == null
         ? 'Ruta no disponible (sin conexión)'
         : '${trip!.origin} → ${trip!.destination}';
@@ -142,7 +143,10 @@ class _RequestDetailBody extends ConsumerWidget {
                       ),
                     ),
                   ),
-                  TextButton(onPressed: onRetryTrip, child: const Text('Reintentar')),
+                  TextButton(
+                    onPressed: onRetryTrip,
+                    child: const Text('Reintentar'),
+                  ),
                 ],
               ),
             ),
@@ -247,20 +251,20 @@ class _RequestDetailBody extends ConsumerWidget {
             onPressed: () async {
               final deleted = await ref
                   .read(notificationRemoteDatasourceProvider)
-                  .deleteRelatedToTrip(
-                    userId: userId!,
-                    tripId: request.tripId,
-                  );
+                  .deleteRelatedToTrip(userId: userId!, tripId: request.tripId);
               ref.invalidate(notificationsProvider(userId!));
               if (!context.mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    deleted > 0
-                        ? 'Notificación eliminada'
-                        : 'No había notificaciones para eliminar',
-                  ),
-                ),
+              showAppSnackBar(
+                context,
+                title: deleted > 0
+                    ? 'Notificación eliminada'
+                    : 'Sin notificaciones',
+                message: deleted > 0
+                    ? 'La alerta relacionada con este viaje fue eliminada.'
+                    : 'No había notificaciones pendientes para este viaje.',
+                type: deleted > 0
+                    ? AppSnackBarType.success
+                    : AppSnackBarType.info,
               );
               if (deleted > 0 && context.canPop()) {
                 context.pop();
@@ -276,7 +280,9 @@ class _RequestDetailBody extends ConsumerWidget {
             label: 'Cancelar solicitud',
             isOutlined: true,
             onPressed: () async {
-              await ref.read(requestNotifierProvider.notifier).cancelRequest(
+              await ref
+                  .read(requestNotifierProvider.notifier)
+                  .cancelRequest(
                     request.id,
                     tripId: request.tripId,
                     passengerId: request.passengerId,
@@ -284,14 +290,17 @@ class _RequestDetailBody extends ConsumerWidget {
               ref.invalidate(requestByIdProvider(request.id));
               if (!context.mounted) return;
               final state = ref.read(requestNotifierProvider);
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    state.hasError
-                        ? state.error.toString()
-                        : 'Solicitud cancelada',
-                  ),
-                ),
+              showAppSnackBar(
+                context,
+                title: state.hasError
+                    ? 'No se canceló la solicitud'
+                    : 'Solicitud cancelada',
+                message: state.hasError
+                    ? state.error.toString()
+                    : 'Tu solicitud fue retirada correctamente.',
+                type: state.hasError
+                    ? AppSnackBarType.error
+                    : AppSnackBarType.success,
               );
             },
           ),

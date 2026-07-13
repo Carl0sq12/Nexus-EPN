@@ -13,6 +13,7 @@ import '../../../../core/constants/app_text_styles.dart';
 
 import '../../../../core/providers/appwrite_provider.dart';
 import '../../../../core/utils/geo_fare.dart';
+import '../../../../core/widgets/app_snackbar.dart';
 import '../../../../core/widgets/custom_button.dart';
 import '../../../map/domain/entities/route_info.dart';
 import '../../../map/domain/entities/user_location.dart';
@@ -85,8 +86,11 @@ class _CreateTripPageState extends ConsumerState<CreateTripPage> {
       if (_destinationPoint != null) await _loadRoute();
     } catch (e) {
       if (!mounted || !refresh) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo actualizar la ubicación: $e')),
+      showAppSnackBar(
+        context,
+        title: 'Ubicación no actualizada',
+        message: 'No pudimos obtener tu ubicación actual. $e',
+        type: AppSnackBarType.error,
       );
     }
   }
@@ -139,8 +143,11 @@ class _CreateTripPageState extends ConsumerState<CreateTripPage> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('No se pudo cargar el viaje: $e')),
+        showAppSnackBar(
+          context,
+          title: 'No se pudo cargar el viaje',
+          message: e.toString(),
+          type: AppSnackBarType.error,
         );
       }
     } finally {
@@ -375,10 +382,23 @@ class _CreateTripPageState extends ConsumerState<CreateTripPage> {
 
     ref.listen(tripNotifierProvider, (previous, next) {
       if (next is AsyncError && mounted) {
-        ScaffoldMessenger.of(
+        showAppSnackBar(
           context,
-        ).showSnackBar(SnackBar(content: Text(next.error.toString())));
+          title: _isEditing
+              ? 'No se guardaron los cambios'
+              : 'No se publicó el viaje',
+          message: next.error.toString(),
+          type: AppSnackBarType.error,
+        );
       } else if (next is AsyncData && previous is AsyncLoading && mounted) {
+        showAppSnackBar(
+          context,
+          title: _isEditing ? 'Viaje actualizado' : 'Viaje publicado',
+          message: _isEditing
+              ? 'Los cambios quedaron guardados correctamente.'
+              : 'Tu viaje ya está disponible para recibir solicitudes.',
+          type: AppSnackBarType.success,
+        );
         context.pop();
       }
     });
@@ -519,17 +539,21 @@ class _CreateTripPageState extends ConsumerState<CreateTripPage> {
               if (!_formKey.currentState!.validate()) return;
               final dt = _buildDateTime();
               if (dt == null) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Selecciona fecha y hora')),
+                showAppSnackBar(
+                  context,
+                  title: 'Falta fecha y hora',
+                  message: 'Selecciona cuándo saldrá el viaje.',
+                  type: AppSnackBarType.warning,
                 );
                 return;
               }
               if (userId == null) return;
               if (_seats > AppLimits.maxTripSeats) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Máximo 4 asientos disponibles por viaje'),
-                  ),
+                showAppSnackBar(
+                  context,
+                  title: 'Cupos fuera del límite',
+                  message: 'Puedes publicar máximo 4 asientos por viaje.',
+                  type: AppSnackBarType.warning,
                 );
                 return;
               }
@@ -539,32 +563,33 @@ class _CreateTripPageState extends ConsumerState<CreateTripPage> {
                 );
                 if (!context.mounted) return;
                 if (vehicle?.isApproved != true) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text(
-                        'Tu vehículo debe estar aprobado antes de publicar un viaje',
-                      ),
-                    ),
+                  showAppSnackBar(
+                    context,
+                    title: 'Vehículo pendiente',
+                    message:
+                        'Tu vehículo debe estar aprobado antes de publicar un viaje.',
+                    type: AppSnackBarType.warning,
                   );
                   return;
                 }
               }
               if (!context.mounted) return;
               if (_originPoint == null || _destinationPoint == null) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Marca origen y destino en el mapa'),
-                  ),
+                showAppSnackBar(
+                  context,
+                  title: 'Ruta incompleta',
+                  message: 'Marca el origen y el destino en el mapa.',
+                  type: AppSnackBarType.warning,
                 );
                 return;
               }
               if (_routeInfo == null || _routeInfo!.points.isEmpty) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text(
-                      'Calcula una ruta válida antes de publicar el viaje',
-                    ),
-                  ),
+                showAppSnackBar(
+                  context,
+                  title: 'Ruta no calculada',
+                  message:
+                      'Calcula una ruta válida antes de publicar el viaje.',
+                  type: AppSnackBarType.warning,
                 );
                 return;
               }

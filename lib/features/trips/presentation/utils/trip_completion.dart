@@ -6,6 +6,7 @@ import '../../../notifications/presentation/providers/notification_provider.dart
 import '../../../requests/domain/entities/trip_request.dart';
 import '../../../requests/presentation/providers/request_provider.dart';
 import '../../../trips/domain/entities/trip.dart';
+import '../providers/trip_location_provider.dart';
 import '../providers/trip_provider.dart';
 
 /// Completes a trip: status, passenger rating prompts, chat cleanup.
@@ -45,6 +46,10 @@ Future<bool> completeTripWithCleanup(
 
   try {
     await ref.read(chatNotifierProvider.notifier).deleteChatForTrip(trip.id);
+  } catch (_) {}
+
+  try {
+    await ref.read(tripLocationDatasourceProvider).deleteLocation(trip.id);
   } catch (_) {}
 
   ref.invalidate(tripByIdProvider(trip.id));

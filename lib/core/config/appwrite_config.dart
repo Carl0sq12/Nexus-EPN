@@ -28,6 +28,7 @@ class AppwriteConfig {
   static const String collectionSosAlerts = 'sos_alerts';
   static const String collectionEmergencyContacts = 'emergency_contacts';
   static const String collectionNotifications = 'notifications';
+  static const String collectionTripLocations = 'trip_locations';
 
   static void validate() {
     if (projectId.isEmpty) {

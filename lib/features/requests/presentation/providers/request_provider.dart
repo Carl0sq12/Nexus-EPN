@@ -500,10 +500,18 @@ class DriverIncomingRequest {
 Stream<List<TripRequest>> _pollRequests(
   Future<List<TripRequest>> Function() load,
 ) async* {
-  yield await load();
+  List<TripRequest>? lastGood;
   while (true) {
+    try {
+      lastGood = await load();
+      yield lastGood;
+    } catch (e, st) {
+      if (lastGood == null) {
+        Error.throwWithStackTrace(e, st);
+      }
+      yield lastGood;
+    }
     await Future<void>.delayed(const Duration(seconds: 3));
-    yield await load();
   }
 }
 

@@ -12,6 +12,7 @@ import '../../../../core/constants/app_colors.dart';
 import '../../../../core/constants/app_strings.dart';
 import '../../../../core/constants/app_text_styles.dart';
 import '../../../../core/providers/appwrite_provider.dart';
+import '../../../../core/widgets/app_snackbar.dart';
 import '../../../../core/widgets/custom_button.dart';
 import '../../../../core/widgets/loading_widget.dart';
 import '../../../map/domain/entities/user_location.dart';
@@ -20,10 +21,11 @@ import '../../../notifications/presentation/providers/notification_provider.dart
 import '../../../requests/presentation/providers/request_provider.dart';
 import '../../../requests/domain/entities/trip_request.dart';
 import '../../domain/entities/trip.dart';
+import '../providers/trip_location_provider.dart';
 import '../providers/trip_provider.dart';
 import '../utils/trip_completion.dart';
 
-/// In-app navigation view for a driver after starting a trip.
+/// In-app navigation view after a trip starts.
 class TripNavigationPage extends ConsumerStatefulWidget {
   final String tripId;
 
@@ -34,9 +36,14 @@ class TripNavigationPage extends ConsumerStatefulWidget {
 }
 
 class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   late final AnimatedMapController _animatedMapController;
   bool _autoFollowDriver = true;
+  DateTime? _lastPublishedLocationAt;
+  LatLng? _lastPublishedLocationPoint;
+  bool _publishingDriverLocation = false;
+  bool _driverLocationPublishWarningShown = false;
+  List<TripRequest> _cachedAcceptedRequests = const [];
 
   // --- Arrival / location-permission tracking ---
   final Set<String> _notifiedStopKeys = {};
@@ -48,6 +55,7 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _animatedMapController = AnimatedMapController(
       vsync: this,
       duration: const Duration(milliseconds: 650),
@@ -57,8 +65,31 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _animatedMapController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    ref.invalidate(requestsByTripProvider(widget.tripId));
+    ref.invalidate(tripByIdProvider(widget.tripId));
+    ref.invalidate(tripLocationStreamProvider(widget.tripId));
+    ref.invalidate(currentLocationStreamProvider);
+  }
+
+  List<TripRequest> _acceptedRequestsFrom(
+    AsyncValue<List<TripRequest>> requestsAsync,
+  ) {
+    final requests = requestsAsync.asData?.value;
+    if (requests == null) return _cachedAcceptedRequests;
+
+    final accepted = requests
+        .where((request) => request.status == AppStrings.statusAccepted)
+        .toList();
+    _cachedAcceptedRequests = accepted;
+    return accepted;
   }
 
   /// Smoothly pans (and optionally zooms) the camera to [point], instead of
@@ -76,10 +107,9 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
     final driverLat = location.latitude;
     final driverLng = location.longitude;
 
-    final requests =
-        ref.read(requestsByTripProvider(trip.id)).asData?.value ?? const [];
-    final accepted =
-        requests.where((r) => r.status == AppStrings.statusAccepted).toList();
+    final accepted = _acceptedRequestsFrom(
+      ref.read(requestsByTripProvider(trip.id)),
+    );
     final ds = ref.read(notificationRemoteDatasourceProvider);
 
     // Paradas de pasajeros aceptados.
@@ -170,6 +200,58 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
     }
   }
 
+  Future<void> _publishDriverLocation(Trip trip, UserLocation location) async {
+    if (trip.status == AppStrings.statusCompleted ||
+        trip.status == AppStrings.statusCancelled) {
+      return;
+    }
+    if (_publishingDriverLocation) return;
+
+    final point = LatLng(location.latitude, location.longitude);
+    final now = DateTime.now();
+    final previousPoint = _lastPublishedLocationPoint;
+    final previousAt = _lastPublishedLocationAt;
+    final movedMeters = previousPoint == null
+        ? double.infinity
+        : Geolocator.distanceBetween(
+            previousPoint.latitude,
+            previousPoint.longitude,
+            point.latitude,
+            point.longitude,
+          );
+    final elapsed = previousAt == null
+        ? const Duration(days: 1)
+        : now.difference(previousAt);
+
+    if (elapsed < const Duration(seconds: 2) && movedMeters < 5) return;
+
+    _publishingDriverLocation = true;
+    _lastPublishedLocationAt = now;
+    _lastPublishedLocationPoint = point;
+    try {
+      await ref
+          .read(tripLocationDatasourceProvider)
+          .upsertLocation(
+            tripId: trip.id,
+            driverId: trip.driverId,
+            location: location,
+          );
+      _driverLocationPublishWarningShown = false;
+    } catch (e) {
+      if (mounted && !_driverLocationPublishWarningShown) {
+        _driverLocationPublishWarningShown = true;
+        showAppSnackBar(
+          context,
+          title: 'Ubicación en vivo no enviada',
+          message: 'Revisa que trip_locations exista en Appwrite. $e',
+          type: AppSnackBarType.error,
+        );
+      }
+    } finally {
+      _publishingDriverLocation = false;
+    }
+  }
+
   Future<void> _showLocationPrompt(String error) async {
     if (!mounted) return;
     final serviceDisabled = error.contains('Location services are disabled');
@@ -224,31 +306,6 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
     final userId = authState.value?.userId;
     final tripState = ref.watch(tripNotifierProvider);
 
-    ref.listen(currentLocationStreamProvider, (previous, next) {
-      if (next.hasError) {
-        if (!_locationPromptShown) {
-          _locationPromptShown = true;
-          final errorText = next.error.toString();
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _showLocationPrompt(errorText);
-          });
-        }
-        return;
-      }
-      _locationPromptShown = false;
-
-      final location = next.asData?.value;
-      if (location == null) return;
-      if (_autoFollowDriver) {
-        final driverPoint = LatLng(location.latitude, location.longitude);
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted) return;
-          _animateCameraTo(driverPoint, zoom: 16);
-        });
-      }
-      _checkArrivals(location);
-    });
-
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
@@ -264,9 +321,72 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
             loading: () => const LoadingWidget(),
             error: (e, _) => Center(child: Text(e.toString())),
             data: (trip) {
-              if (userId == null || trip.driverId != userId) {
+              final requestsAsync = ref.watch(requestsByTripProvider(trip.id));
+              final acceptedRequests = _acceptedRequestsFrom(requestsAsync);
+              final isDriver = userId == trip.driverId;
+              final passengerRequest = userId == null
+                  ? null
+                  : _acceptedPassengerRequest(acceptedRequests, userId);
+              if (isDriver) {
+                ref.listen(currentLocationStreamProvider, (previous, next) {
+                  if (next.hasError) {
+                    if (!_locationPromptShown) {
+                      _locationPromptShown = true;
+                      final errorText = next.error.toString();
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        _showLocationPrompt(errorText);
+                      });
+                    }
+                    return;
+                  }
+                  _locationPromptShown = false;
+
+                  final location = next.asData?.value;
+                  if (location == null) return;
+                  _publishDriverLocation(trip, location);
+                  if (_autoFollowDriver) {
+                    final driverPoint = LatLng(
+                      location.latitude,
+                      location.longitude,
+                    );
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (!mounted) return;
+                      _animateCameraTo(driverPoint, zoom: 16);
+                    });
+                  }
+                  _checkArrivals(location);
+                });
+              } else {
+                ref.listen(tripLocationStreamProvider(trip.id), (
+                  previous,
+                  next,
+                ) {
+                  final remoteLocation = next.asData?.value?.toUserLocation();
+                  if (remoteLocation == null || !_autoFollowDriver) return;
+                  final driverPoint = LatLng(
+                    remoteLocation.latitude,
+                    remoteLocation.longitude,
+                  );
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (!mounted) return;
+                    _animateCameraTo(driverPoint, zoom: 16);
+                  });
+                });
+              }
+              final waitingForRequests =
+                  requestsAsync.isLoading && _cachedAcceptedRequests.isEmpty;
+              if (!isDriver && waitingForRequests) {
+                return const LoadingWidget();
+              }
+              if (userId == null || (!isDriver && passengerRequest == null)) {
                 return const Center(
-                  child: Text('Solo el conductor puede navegar este viaje'),
+                  child: Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Text(
+                      'Solo el conductor o un pasajero aceptado puede ver esta navegación.',
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
                 );
               }
 
@@ -284,34 +404,41 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
                 );
               }
 
-              final locationAsync = ref.watch(currentLocationStreamProvider);
-              final driverPoint = locationAsync.asData == null
+              final locationAsync = isDriver
+                  ? ref.watch(currentLocationStreamProvider)
+                  : null;
+              final liveTripLocationAsync = isDriver
                   ? null
-                  : LatLng(
-                      locationAsync.asData!.value.latitude,
-                      locationAsync.asData!.value.longitude,
-                    );
-              final driverHeading = _normalizedHeading(
-                locationAsync.asData?.value.heading,
-              );
+                  : ref.watch(tripLocationStreamProvider(trip.id));
+              final driverLocation = isDriver
+                  ? locationAsync?.asData?.value
+                  : liveTripLocationAsync?.asData?.value?.toUserLocation();
+              final driverPoint = driverLocation == null
+                  ? null
+                  : LatLng(driverLocation.latitude, driverLocation.longitude);
+              final driverHeading = _normalizedHeading(driverLocation?.heading);
               // Ruta fija origen→destino para no martillar OSRM en cada GPS tick.
               final routeAsync = ref.watch(
                 routeInfoProvider(
                   RouteRequest(origin: origin, destination: destination),
                 ),
               );
-              final passengerStops = ref
-                  .watch(requestsByTripProvider(trip.id))
-                  .maybeWhen(
-                    data: (requests) => requests
-                        .where(
-                          (request) =>
-                              request.status == AppStrings.statusAccepted,
-                        )
-                        .expand((request) => request.stops)
-                        .toList(),
-                    orElse: () => const <TripRequestStop>[],
-                  );
+              final passengerStops = isDriver
+                  ? acceptedRequests.expand((request) => request.stops).toList()
+                  : passengerRequest!.stops;
+              final routePoints = routeAsync.asData?.value.points;
+              final baseDistanceMeters =
+                  routeAsync.asData?.value.distanceMeters ??
+                  trip.routeDistanceMeters;
+              final baseDurationSeconds =
+                  routeAsync.asData?.value.durationSeconds ??
+                  trip.routeDurationSeconds;
+              final navigationMetrics = _remainingRouteMetrics(
+                driverPoint: driverPoint,
+                routePoints: routePoints,
+                fallbackDistanceMeters: baseDistanceMeters,
+                fallbackDurationSeconds: baseDurationSeconds,
+              );
 
               return Stack(
                 children: [
@@ -321,7 +448,7 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
                     destination: destination,
                     driverPoint: driverPoint,
                     driverHeading: driverHeading,
-                    routePoints: routeAsync.asData?.value.points,
+                    routePoints: routePoints,
                     passengerStops: passengerStops,
                     onUserGesture: () {
                       // El usuario movió el mapa manualmente: deja de seguir
@@ -331,11 +458,12 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
                       }
                     },
                   ),
-                  Positioned(
-                    top: 16,
-                    right: 16,
-                    child: _HeadingIndicator(heading: driverHeading),
-                  ),
+                  if (isDriver)
+                    Positioned(
+                      top: 16,
+                      right: 16,
+                      child: _HeadingIndicator(heading: driverHeading),
+                    ),
                   if (_arrivalBannerMessage != null)
                     Positioned(
                       top: 16,
@@ -349,31 +477,12 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
                     ),
                   Positioned(
                     right: 16,
-                    bottom: 190,
+                    bottom: 218,
                     child: Column(
                       children: [
-                        FloatingActionButton.small(
-                          heroTag: 'center_driver',
-                          backgroundColor: _autoFollowDriver
-                              ? AppColors.primary
-                              : AppColors.surface,
-                          onPressed: driverPoint == null
-                              ? null
-                              : () {
-                                  setState(() => _autoFollowDriver = true);
-                                  _animateCameraTo(driverPoint, zoom: 16);
-                                },
-                          child: Icon(
-                            Icons.my_location,
-                            color: _autoFollowDriver
-                                ? Colors.white
-                                : AppColors.primary,
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        FloatingActionButton.small(
-                          heroTag: 'refresh_route',
-                          backgroundColor: AppColors.surface,
+                        _MapControlButton(
+                          icon: Icons.refresh,
+                          tooltip: 'Actualizar ruta',
                           onPressed: () {
                             ref.invalidate(
                               routeInfoProvider(
@@ -383,13 +492,27 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
                                 ),
                               ),
                             );
-                            ref.invalidate(currentLocationStreamProvider);
+                            if (isDriver) {
+                              ref.invalidate(currentLocationStreamProvider);
+                            } else {
+                              ref.invalidate(
+                                tripLocationStreamProvider(trip.id),
+                              );
+                            }
                           },
-                          child: const Icon(
-                            Icons.refresh,
-                            color: AppColors.primary,
-                          ),
                         ),
+                        if (driverPoint != null) ...[
+                          const SizedBox(height: 12),
+                          _MapControlButton(
+                            icon: Icons.my_location,
+                            tooltip: 'Centrar ubicación',
+                            isActive: _autoFollowDriver,
+                            onPressed: () {
+                              setState(() => _autoFollowDriver = true);
+                              _animateCameraTo(driverPoint, zoom: 16);
+                            },
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -399,13 +522,13 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
                     bottom: 16,
                     child: _TripNavigationPanel(
                       trip: trip,
-                      routeDistanceMeters:
-                          routeAsync.asData?.value.distanceMeters ??
-                          trip.routeDistanceMeters,
-                      routeDurationSeconds:
-                          routeAsync.asData?.value.durationSeconds ??
-                          trip.routeDurationSeconds,
-                      locationError: locationAsync.asError?.error.toString(),
+                      routeDistanceMeters: navigationMetrics.distanceMeters,
+                      routeDurationSeconds: navigationMetrics.durationSeconds,
+                      isDriver: isDriver,
+                      locationError: locationAsync?.asError?.error.toString(),
+                      liveLocationError: liveTripLocationAsync?.asError?.error
+                          .toString(),
+                      hasLiveDriverLocation: driverPoint != null,
                       routeError: routeAsync.asError?.error.toString(),
                       isCompleting: tripState.isLoading,
                       onFinish: tripState.isLoading
@@ -559,6 +682,46 @@ class _NavigationMap extends StatelessWidget {
   }
 }
 
+class _MapControlButton extends StatelessWidget {
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onPressed;
+  final bool isActive;
+
+  const _MapControlButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onPressed,
+    this.isActive = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: isActive ? AppColors.primary : AppColors.surface,
+      borderRadius: BorderRadius.circular(14),
+      elevation: 4,
+      shadowColor: const Color.fromRGBO(13, 111, 148, 0.18),
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(14),
+        child: Tooltip(
+          message: tooltip,
+          child: SizedBox(
+            width: 50,
+            height: 50,
+            child: Icon(
+              icon,
+              color: isActive ? Colors.white : AppColors.primary,
+              size: 28,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// Driver marker that smoothly rotates toward the direction of real movement
 /// (computed from consecutive GPS fixes) instead of snapping instantly to the
 /// raw compass heading, which is unreliable inside a moving vehicle.
@@ -662,7 +825,10 @@ class _TripNavigationPanel extends StatelessWidget {
   final Trip trip;
   final double? routeDistanceMeters;
   final double? routeDurationSeconds;
+  final bool isDriver;
   final String? locationError;
+  final String? liveLocationError;
+  final bool hasLiveDriverLocation;
   final String? routeError;
   final bool isCompleting;
   final VoidCallback? onFinish;
@@ -671,7 +837,10 @@ class _TripNavigationPanel extends StatelessWidget {
     required this.trip,
     required this.routeDistanceMeters,
     required this.routeDurationSeconds,
+    required this.isDriver,
     required this.locationError,
+    required this.liveLocationError,
+    required this.hasLiveDriverLocation,
     required this.routeError,
     required this.isCompleting,
     required this.onFinish,
@@ -716,15 +885,14 @@ class _TripNavigationPanel extends StatelessWidget {
               if (routeDistanceMeters != null)
                 _MetricChip(
                   icon: Icons.straighten,
-                  label:
-                      '${(routeDistanceMeters! / 1000).toStringAsFixed(1)} km',
+                  label: '${_formatDistance(routeDistanceMeters!)} restantes',
                 ),
               if (routeDistanceMeters != null && routeDurationSeconds != null)
                 const SizedBox(width: 8),
               if (routeDurationSeconds != null)
                 _MetricChip(
                   icon: Icons.schedule,
-                  label: '${(routeDurationSeconds! / 60).round()} min',
+                  label: '${_formatDuration(routeDurationSeconds!)} restantes',
                 ),
             ],
           ),
@@ -740,17 +908,211 @@ class _TripNavigationPanel extends StatelessWidget {
               locationError!,
               style: AppTextStyles.bodySmall.copyWith(color: AppColors.error),
             ),
+          ] else if (!isDriver && liveLocationError != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              'No se pudo leer la ubicación en vivo del conductor.',
+              style: AppTextStyles.bodySmall.copyWith(color: AppColors.error),
+            ),
+          ] else if (!isDriver && !hasLiveDriverLocation) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Esperando la ubicación en vivo del conductor...',
+              style: AppTextStyles.bodySmall.copyWith(
+                color: AppColors.textSecondary,
+              ),
+            ),
           ],
           const SizedBox(height: 14),
-          CustomButton(
-            label: 'Finalizar viaje',
-            isLoading: isCompleting,
-            onPressed: onFinish,
-          ),
+          if (isDriver)
+            CustomButton(
+              label: 'Finalizar viaje',
+              isLoading: isCompleting,
+              onPressed: onFinish,
+            )
+          else
+            Text(
+              'Recibirás avisos cuando el conductor llegue a tu parada y al destino.',
+              style: AppTextStyles.bodySmall.copyWith(
+                color: AppColors.textSecondary,
+              ),
+            ),
         ],
       ),
     );
   }
+}
+
+TripRequest? _acceptedPassengerRequest(
+  List<TripRequest> requests,
+  String userId,
+) {
+  for (final request in requests) {
+    if (request.passengerId == userId &&
+        request.status == AppStrings.statusAccepted) {
+      return request;
+    }
+  }
+  return null;
+}
+
+class _NavigationMetrics {
+  final double? distanceMeters;
+  final double? durationSeconds;
+
+  const _NavigationMetrics({
+    required this.distanceMeters,
+    required this.durationSeconds,
+  });
+}
+
+class _RouteProjection {
+  final double distanceToRouteMeters;
+  final double remainingMeters;
+
+  const _RouteProjection({
+    required this.distanceToRouteMeters,
+    required this.remainingMeters,
+  });
+}
+
+_NavigationMetrics _remainingRouteMetrics({
+  required LatLng? driverPoint,
+  required List<LatLng>? routePoints,
+  required double? fallbackDistanceMeters,
+  required double? fallbackDurationSeconds,
+}) {
+  if (driverPoint == null || routePoints == null || routePoints.length < 2) {
+    return _NavigationMetrics(
+      distanceMeters: fallbackDistanceMeters,
+      durationSeconds: fallbackDurationSeconds,
+    );
+  }
+
+  final totalRouteMeters = _polylineDistance(routePoints);
+  if (totalRouteMeters <= 0) {
+    return _NavigationMetrics(
+      distanceMeters: fallbackDistanceMeters,
+      durationSeconds: fallbackDurationSeconds,
+    );
+  }
+
+  final projection = _nearestRouteProjection(driverPoint, routePoints);
+  if (projection == null) {
+    return _NavigationMetrics(
+      distanceMeters: fallbackDistanceMeters,
+      durationSeconds: fallbackDurationSeconds,
+    );
+  }
+
+  final remainingMeters = projection.remainingMeters.clamp(0, totalRouteMeters);
+  final baseDistanceMeters =
+      fallbackDistanceMeters != null && fallbackDistanceMeters > 0
+      ? fallbackDistanceMeters
+      : totalRouteMeters;
+  final remainingDurationSeconds =
+      fallbackDurationSeconds != null && fallbackDurationSeconds > 0
+      ? fallbackDurationSeconds * (remainingMeters / baseDistanceMeters)
+      : null;
+
+  return _NavigationMetrics(
+    distanceMeters: remainingMeters.toDouble(),
+    durationSeconds: remainingDurationSeconds,
+  );
+}
+
+_RouteProjection? _nearestRouteProjection(
+  LatLng point,
+  List<LatLng> routePoints,
+) {
+  if (routePoints.length < 2) return null;
+
+  final segmentLengths = <double>[];
+  for (var i = 0; i < routePoints.length - 1; i++) {
+    segmentLengths.add(_distanceBetween(routePoints[i], routePoints[i + 1]));
+  }
+
+  final distanceAfterSegment = List<double>.filled(segmentLengths.length, 0);
+  var suffixDistance = 0.0;
+  for (var i = segmentLengths.length - 1; i >= 0; i--) {
+    distanceAfterSegment[i] = suffixDistance;
+    suffixDistance += segmentLengths[i];
+  }
+
+  _RouteProjection? best;
+  for (var i = 0; i < routePoints.length - 1; i++) {
+    final start = routePoints[i];
+    final end = routePoints[i + 1];
+    final projected = _projectPointToSegment(point, start, end);
+    final distanceToRoute = _distanceBetween(point, projected);
+    final remainingMeters =
+        _distanceBetween(projected, end) + distanceAfterSegment[i];
+    final candidate = _RouteProjection(
+      distanceToRouteMeters: distanceToRoute,
+      remainingMeters: remainingMeters,
+    );
+    if (best == null ||
+        candidate.distanceToRouteMeters < best.distanceToRouteMeters) {
+      best = candidate;
+    }
+  }
+  return best;
+}
+
+LatLng _projectPointToSegment(LatLng point, LatLng start, LatLng end) {
+  final referenceLatitude =
+      (point.latitude + start.latitude + end.latitude) / 3;
+  final longitudeScale = math.cos(referenceLatitude * math.pi / 180);
+  final startX = start.longitude * longitudeScale;
+  final startY = start.latitude;
+  final endX = end.longitude * longitudeScale;
+  final endY = end.latitude;
+  final pointX = point.longitude * longitudeScale;
+  final pointY = point.latitude;
+
+  final segmentX = endX - startX;
+  final segmentY = endY - startY;
+  final segmentLengthSquared = segmentX * segmentX + segmentY * segmentY;
+  if (segmentLengthSquared == 0) return start;
+
+  final t =
+      (((pointX - startX) * segmentX + (pointY - startY) * segmentY) /
+              segmentLengthSquared)
+          .clamp(0.0, 1.0);
+
+  return LatLng(
+    start.latitude + (end.latitude - start.latitude) * t,
+    start.longitude + (end.longitude - start.longitude) * t,
+  );
+}
+
+double _polylineDistance(List<LatLng> points) {
+  var meters = 0.0;
+  for (var i = 0; i < points.length - 1; i++) {
+    meters += _distanceBetween(points[i], points[i + 1]);
+  }
+  return meters;
+}
+
+double _distanceBetween(LatLng a, LatLng b) {
+  return Geolocator.distanceBetween(
+    a.latitude,
+    a.longitude,
+    b.latitude,
+    b.longitude,
+  );
+}
+
+String _formatDistance(double meters) {
+  if (meters >= 950) return '${(meters / 1000).toStringAsFixed(1)} km';
+  if (meters >= 100) return '${((meters / 10).round() * 10)} m';
+  return '${meters.round()} m';
+}
+
+String _formatDuration(double seconds) {
+  if (seconds <= 0) return '0 min';
+  if (seconds < 60) return '<1 min';
+  return '${(seconds / 60).ceil()} min';
 }
 
 class _MetricChip extends StatelessWidget {
@@ -890,24 +1252,24 @@ Future<void> _finishTrip(
 
   if (confirmed != true) return;
 
-  final ok = await completeTripWithCleanup(
-    ref,
-    trip: trip,
-    driverId: driverId,
-  );
+  final ok = await completeTripWithCleanup(ref, trip: trip, driverId: driverId);
   if (!context.mounted) return;
   if (!ok) {
     final nextState = ref.read(tripNotifierProvider);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(nextState.error?.toString() ?? 'No se pudo completar'),
-      ),
+    showAppSnackBar(
+      context,
+      title: 'No se completó el viaje',
+      message: nextState.error?.toString() ?? 'No se pudo completar.',
+      type: AppSnackBarType.error,
     );
     return;
   }
 
-  ScaffoldMessenger.of(context).showSnackBar(
-    const SnackBar(content: Text('Viaje completado. Chat eliminado.')),
+  showAppSnackBar(
+    context,
+    title: 'Viaje completado',
+    message: 'El viaje finalizó correctamente y el chat fue eliminado.',
+    type: AppSnackBarType.success,
   );
   context.go('${AppStrings.routeTrips}/${trip.id}/report');
 }
@@ -951,8 +1313,11 @@ Future<bool> _isNearDestination(
     return false;
   } catch (e) {
     if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo verificar tu ubicación: $e')),
+      showAppSnackBar(
+        context,
+        title: 'Ubicación no verificada',
+        message: 'No se pudo confirmar tu distancia al destino. $e',
+        type: AppSnackBarType.error,
       );
     }
     return false;

@@ -113,8 +113,7 @@ final routerProvider = Provider<GoRouter>((ref) {
           matched == AppStrings.routeMyTrips ||
           // Trip request management: /trips/:id/requests — NOT /requests inbox.
           (matched.startsWith('${AppStrings.routeTrips}/') &&
-              matched.endsWith('/requests')) ||
-          matched.endsWith('/navigation');
+              matched.endsWith('/requests'));
       if (driverOnlyRoute &&
           (onboardingStatus.role != AppStrings.roleDriver ||
               !onboardingStatus.hasVehicle ||

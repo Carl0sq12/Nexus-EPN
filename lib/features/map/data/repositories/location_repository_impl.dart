@@ -17,6 +17,7 @@ class LocationRepositoryImpl implements LocationRepository {
         latitude: position.latitude,
         longitude: position.longitude,
         heading: position.heading,
+        speed: position.speed,
       );
     } catch (e) {
       throw ServerException(e.toString());

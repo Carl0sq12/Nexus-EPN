@@ -49,6 +49,7 @@ final currentLocationStreamProvider = StreamProvider<UserLocation>((
     latitude: initialPosition.latitude,
     longitude: initialPosition.longitude,
     heading: initialPosition.heading,
+    speed: initialPosition.speed,
   );
 
   final LocationSettings settings;
@@ -77,6 +78,7 @@ final currentLocationStreamProvider = StreamProvider<UserLocation>((
       latitude: position.latitude,
       longitude: position.longitude,
       heading: position.heading,
+      speed: position.speed,
     ),
   );
 });

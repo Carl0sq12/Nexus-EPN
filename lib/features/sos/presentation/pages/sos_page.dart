@@ -5,6 +5,7 @@ import '../../../../core/constants/app_colors.dart';
 import '../../../../core/constants/app_text_styles.dart';
 import '../../../../core/constants/app_strings.dart';
 import '../../../../core/providers/appwrite_provider.dart';
+import '../../../onboarding/presentation/providers/onboarding_provider.dart';
 import '../utils/sos_actions.dart';
 import '../widgets/sos_button.dart';
 
@@ -18,14 +19,20 @@ class SosPage extends ConsumerStatefulWidget {
 class _SosPageState extends ConsumerState<SosPage> {
   String _selectedType = AppStrings.sosTypePersonal;
 
-  String get _selectedLabel => _selectedType == AppStrings.sosTypeMechanical
-      ? AppStrings.sosMechanicalProblem
-      : AppStrings.sosPersonalEmergency;
-
   @override
   Widget build(BuildContext context) {
     final authState = ref.watch(authStateProvider);
     final userId = authState.value?.userId;
+    final isDriver = ref
+        .watch(onboardingStatusProvider)
+        .maybeWhen(
+          data: (status) => status.role == AppStrings.roleDriver,
+          orElse: () => false,
+        );
+    final selectedType = isDriver ? _selectedType : AppStrings.sosTypePersonal;
+    final selectedLabel = selectedType == AppStrings.sosTypeMechanical
+        ? AppStrings.sosMechanicalProblem
+        : AppStrings.sosPersonalEmergency;
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -43,8 +50,11 @@ class _SosPageState extends ConsumerState<SosPage> {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 24),
               child: Text(
-                'La alerta se envía dentro de Nexus Campus a tus contactos '
-                'de emergencia que tengan la app con el mismo número celular.',
+                isDriver
+                    ? 'La alerta se envía dentro de Nexus Campus a tus contactos '
+                          'de emergencia. Usa auxilio mecánico solo para problemas del vehículo.'
+                    : 'La alerta se envía dentro de Nexus Campus a tus contactos '
+                          'de emergencia que tengan la app con el mismo número celular.',
                 style: AppTextStyles.bodySmall.copyWith(
                   color: AppColors.textSecondary,
                 ),
@@ -66,17 +76,20 @@ class _SosPageState extends ConsumerState<SosPage> {
                       ),
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: _SosTypeButton(
-                      label: AppStrings.sosMechanicalProblem,
-                      icon: Icons.build_outlined,
-                      isSelected: _selectedType == AppStrings.sosTypeMechanical,
-                      onTap: () => setState(
-                        () => _selectedType = AppStrings.sosTypeMechanical,
+                  if (isDriver) ...[
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _SosTypeButton(
+                        label: AppStrings.sosMechanicalProblem,
+                        icon: Icons.build_outlined,
+                        isSelected:
+                            _selectedType == AppStrings.sosTypeMechanical,
+                        onTap: () => setState(
+                          () => _selectedType = AppStrings.sosTypeMechanical,
+                        ),
                       ),
                     ),
-                  ),
+                  ],
                 ],
               ),
             ),
@@ -88,8 +101,8 @@ class _SosPageState extends ConsumerState<SosPage> {
                   final result = await sendSosWithNotifications(
                     ref,
                     userId: userId,
-                    alertLabel: _selectedLabel,
-                    alertType: _selectedType,
+                    alertLabel: selectedLabel,
+                    alertType: selectedType,
                   );
                   if (!context.mounted) return;
                   ScaffoldMessenger.of(context).showSnackBar(

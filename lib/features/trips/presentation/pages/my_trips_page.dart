@@ -9,6 +9,7 @@ import '../../../../core/constants/app_limits.dart';
 import '../../../../core/constants/app_strings.dart';
 import '../../../../core/constants/app_text_styles.dart';
 import '../../../../core/providers/appwrite_provider.dart';
+import '../../../../core/widgets/app_snackbar.dart';
 import '../../../../core/widgets/custom_button.dart';
 import '../../../../core/widgets/loading_widget.dart';
 import '../../domain/entities/trip.dart';
@@ -33,9 +34,12 @@ class _MyTripsPageState extends ConsumerState<MyTripsPage> {
 
     ref.listen(tripNotifierProvider, (previous, next) {
       if (next is AsyncError && context.mounted) {
-        ScaffoldMessenger.of(
+        showAppSnackBar(
           context,
-        ).showSnackBar(SnackBar(content: Text(next.error.toString())));
+          title: 'No se pudo actualizar el viaje',
+          message: next.error.toString(),
+          type: AppSnackBarType.error,
+        );
       }
     });
 
@@ -250,9 +254,12 @@ class _MyTripsPageState extends ConsumerState<MyTripsPage> {
           });
 
       if (context.mounted) {
-        ScaffoldMessenger.of(
+        showAppSnackBar(
           context,
-        ).showSnackBar(const SnackBar(content: Text('Viaje actualizado')));
+          title: 'Viaje actualizado',
+          message: 'Los cambios quedaron guardados correctamente.',
+          type: AppSnackBarType.success,
+        );
       }
     } finally {
       originController.dispose();
@@ -292,9 +299,12 @@ class _MyTripsPageState extends ConsumerState<MyTripsPage> {
         .deleteTrip(trip.id, trip.driverId);
 
     if (context.mounted) {
-      ScaffoldMessenger.of(
+      showAppSnackBar(
         context,
-      ).showSnackBar(const SnackBar(content: Text('Viaje cancelado')));
+        title: 'Viaje cancelado',
+        message: 'El viaje fue retirado y ya no recibirá solicitudes.',
+        type: AppSnackBarType.info,
+      );
     }
   }
 
@@ -317,9 +327,12 @@ class _MyTripsPageState extends ConsumerState<MyTripsPage> {
     if (!context.mounted) return;
     final state = ref.read(tripNotifierProvider);
     if (state.hasError) {
-      ScaffoldMessenger.of(
+      showAppSnackBar(
         context,
-      ).showSnackBar(SnackBar(content: Text(state.error.toString())));
+        title: 'No se inició el viaje',
+        message: state.error.toString(),
+        type: AppSnackBarType.error,
+      );
       return;
     }
     context.push('/trips/${trip.id}/navigation');

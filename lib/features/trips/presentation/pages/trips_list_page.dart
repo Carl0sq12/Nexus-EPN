@@ -518,13 +518,13 @@ class _PassengerTripsList extends ConsumerWidget {
   }
 }
 
-class _PassengerRequestsPreview extends StatelessWidget {
+class _PassengerRequestsPreview extends ConsumerWidget {
   final AsyncValue<List<TripRequest>> requestsAsync;
 
   const _PassengerRequestsPreview({required this.requestsAsync});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -563,17 +563,233 @@ class _PassengerRequestsPreview extends StatelessWidget {
                   ),
                 );
               }
+              final latestAccepted = _latestAcceptedRequest(requests);
               final recent = [...requests]
                 ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
               return Column(
-                children: recent
-                    .take(4)
-                    .map((request) => _PassengerRequestTile(request: request))
-                    .toList(),
+                children: [
+                  if (latestAccepted != null) ...[
+                    _AcceptedPassengerTripShortcut(request: latestAccepted),
+                    const SizedBox(height: 12),
+                  ],
+                  ...recent
+                      .take(4)
+                      .map(
+                        (request) => _PassengerRequestTile(request: request),
+                      ),
+                ],
               );
             },
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _AcceptedPassengerTripShortcut extends ConsumerWidget {
+  final TripRequest request;
+
+  const _AcceptedPassengerTripShortcut({required this.request});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final tripAsync = ref.watch(tripByIdProvider(request.tripId));
+
+    return tripAsync.when(
+      loading: () => const _AcceptedTripLoadingCard(),
+      error: (_, _) => _AcceptedTripFallbackCard(request: request),
+      data: (trip) {
+        final driver = ref.watch(profileProvider(trip.driverId)).asData?.value;
+        final driverName = driver?.fullName.trim().isNotEmpty == true
+            ? driver!.fullName.trim()
+            : 'Conductor';
+        final isInProgress = trip.status == AppStrings.statusInProgress;
+        final canOpenNavigation =
+            trip.originLatitude != null &&
+            trip.originLongitude != null &&
+            trip.destinationLatitude != null &&
+            trip.destinationLongitude != null;
+        final actionLabel = isInProgress
+            ? 'Ver ruta en vivo'
+            : canOpenNavigation
+            ? 'Ver ruta del viaje'
+            : 'Ver detalle';
+        final target = canOpenNavigation
+            ? '/trips/${trip.id}/navigation'
+            : '/trips/${trip.id}';
+
+        return InkWell(
+          borderRadius: BorderRadius.circular(18),
+          onTap: () => context.push(target),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: AppColors.primary,
+              borderRadius: BorderRadius.circular(18),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color.fromRGBO(13, 111, 148, 0.18),
+                  blurRadius: 14,
+                  offset: Offset(0, 5),
+                ),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.16),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        isInProgress
+                            ? Icons.navigation_outlined
+                            : Icons.event_available_outlined,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            isInProgress
+                                ? 'Viaje en curso'
+                                : 'Último viaje aceptado',
+                            style: AppTextStyles.labelMedium.copyWith(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Conductor: $driverName',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: AppTextStyles.bodySmall.copyWith(
+                              color: Colors.white.withValues(alpha: 0.82),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  '${trip.origin} → ${trip.destination}',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTextStyles.titleMedium.copyWith(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '${DateFormat('dd/MM HH:mm').format(trip.departureTime.toLocal())} · ${request.passengerCount} cupo(s)',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTextStyles.bodySmall.copyWith(
+                    color: Colors.white.withValues(alpha: 0.82),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () => context.push(target),
+                    icon: Icon(
+                      canOpenNavigation
+                          ? Icons.navigation_outlined
+                          : Icons.chevron_right,
+                    ),
+                    label: Text(actionLabel),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      side: BorderSide(
+                        color: Colors.white.withValues(alpha: 0.68),
+                      ),
+                      backgroundColor: Colors.white.withValues(alpha: 0.08),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _AcceptedTripLoadingCard extends StatelessWidget {
+  const _AcceptedTripLoadingCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.primarySoft,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: const Center(
+        child: SizedBox(
+          width: 22,
+          height: 22,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+      ),
+    );
+  }
+}
+
+class _AcceptedTripFallbackCard extends StatelessWidget {
+  final TripRequest request;
+
+  const _AcceptedTripFallbackCard({required this.request});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(18),
+      onTap: () => context.push('/trips/${request.tripId}'),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: AppColors.primarySoft,
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: Row(
+          children: [
+            const Icon(
+              Icons.event_available_outlined,
+              color: AppColors.primary,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Tienes un viaje aceptado. Toca para abrir el detalle.',
+                style: AppTextStyles.bodySmall.copyWith(
+                  color: AppColors.primary,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            const Icon(Icons.chevron_right, color: AppColors.primary),
+          ],
+        ),
       ),
     );
   }
@@ -689,6 +905,17 @@ class _PassengerRequestTile extends ConsumerWidget {
       _ => AppColors.warning,
     };
   }
+}
+
+TripRequest? _latestAcceptedRequest(List<TripRequest> requests) {
+  TripRequest? latest;
+  for (final request in requests) {
+    if (request.status != AppStrings.statusAccepted) continue;
+    if (latest == null || request.createdAt.isAfter(latest.createdAt)) {
+      latest = request;
+    }
+  }
+  return latest;
 }
 
 class _DriverSection extends ConsumerWidget {

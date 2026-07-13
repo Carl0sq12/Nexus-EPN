@@ -4,6 +4,7 @@ import 'core/constants/app_colors.dart';
 import 'core/constants/app_strings.dart';
 import 'core/router/app_router.dart';
 import 'core/services/local_notification_service.dart';
+import 'core/widgets/device_readiness_gate.dart';
 
 /// Root widget of the application. Configures theming and routing.
 class NexusCampusApp extends ConsumerWidget {
@@ -18,6 +19,9 @@ class NexusCampusApp extends ConsumerWidget {
       title: AppStrings.appName,
       debugShowCheckedModeBanner: false,
       routerConfig: router,
+      builder: (context, child) {
+        return DeviceReadinessGate(child: child ?? const SizedBox.shrink());
+      },
       theme: ThemeData(
         primaryColor: AppColors.primary,
         scaffoldBackgroundColor: AppColors.background,

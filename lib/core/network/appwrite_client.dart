@@ -8,6 +8,8 @@ class AppwriteClientHolder {
 
   static Client? _client;
 
+  static bool get isInitialized => _client != null;
+
   static Client get instance {
     final existing = _client;
     if (existing != null) return existing;

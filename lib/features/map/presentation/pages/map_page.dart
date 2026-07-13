@@ -7,6 +7,8 @@ import 'package:latlong2/latlong.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/constants/app_text_styles.dart';
 import '../../../../core/constants/app_strings.dart';
+import '../../../trips/data/models/trip_location_model.dart';
+import '../../../trips/presentation/providers/trip_location_provider.dart';
 import '../providers/map_provider.dart';
 
 /// Map page showing the user's current location with OpenStreetMap tiles.
@@ -21,10 +23,12 @@ class MapPage extends ConsumerStatefulWidget {
 
 class _MapPageState extends ConsumerState<MapPage> {
   final MapController _mapController = MapController();
+  static const _nearbyCarsRadiusMeters = 5000.0;
 
   @override
   Widget build(BuildContext context) {
     final locationAsync = ref.watch(currentLocationStreamProvider);
+    final nearbyCarsAsync = ref.watch(recentTripLocationsStreamProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -48,14 +52,19 @@ class _MapPageState extends ConsumerState<MapPage> {
         error: (e, _) => const _MapFallback(),
         data: (location) {
           final center = LatLng(location.latitude, location.longitude);
+          final nearbyCars = _nearbyCars(
+            center,
+            nearbyCarsAsync.asData?.value ?? const <TripLocationModel>[],
+          );
           return _MapContent(
             center: center,
             markerIcon: Icons.navigation,
             heading: _normalizedHeading(location.heading),
+            nearbyCars: nearbyCars,
             mapController: _mapController,
             title: AppStrings.mapTitle,
             subtitle:
-                '${location.latitude.toStringAsFixed(4)}, ${location.longitude.toStringAsFixed(4)}',
+                '${location.latitude.toStringAsFixed(4)}, ${location.longitude.toStringAsFixed(4)} · ${nearbyCars.length} auto(s) cerca',
           );
         },
       ),
@@ -82,6 +91,7 @@ class _MapContent extends StatelessWidget {
   final LatLng center;
   final IconData markerIcon;
   final double heading;
+  final List<_NearbyCarMarker> nearbyCars;
   final MapController? mapController;
   final String title;
   final String subtitle;
@@ -90,6 +100,7 @@ class _MapContent extends StatelessWidget {
     required this.center,
     required this.markerIcon,
     required this.heading,
+    this.nearbyCars = const [],
     this.mapController,
     required this.title,
     required this.subtitle,
@@ -109,6 +120,13 @@ class _MapContent extends StatelessWidget {
             ),
             MarkerLayer(
               markers: [
+                for (final car in nearbyCars)
+                  Marker(
+                    point: car.point,
+                    width: 54,
+                    height: 54,
+                    child: _NearbyCarMarkerWidget(car: car),
+                  ),
                 Marker(
                   point: center,
                   width: 60,
@@ -200,6 +218,37 @@ class _MapContent extends StatelessWidget {
                     ],
                   ),
                 ),
+                if (nearbyCars.isNotEmpty) ...[
+                  const SizedBox(width: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppColors.success.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.directions_car,
+                          size: 16,
+                          color: AppColors.success,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          '${nearbyCars.length}',
+                          style: AppTextStyles.caption.copyWith(
+                            color: AppColors.success,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -242,6 +291,93 @@ class _MapHeadingIndicator extends StatelessWidget {
       ),
     );
   }
+}
+
+class _NearbyCarMarker {
+  final String tripId;
+  final LatLng point;
+  final double heading;
+  final double distanceMeters;
+  final DateTime updatedAt;
+
+  const _NearbyCarMarker({
+    required this.tripId,
+    required this.point,
+    required this.heading,
+    required this.distanceMeters,
+    required this.updatedAt,
+  });
+}
+
+class _NearbyCarMarkerWidget extends StatelessWidget {
+  final _NearbyCarMarker car;
+
+  const _NearbyCarMarkerWidget({required this.car});
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: 'Auto en viaje · ${_formatNearbyDistance(car.distanceMeters)}',
+      child: Container(
+        decoration: BoxDecoration(
+          color: AppColors.success,
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white, width: 3),
+          boxShadow: const [
+            BoxShadow(
+              color: Color.fromRGBO(33, 150, 83, 0.30),
+              blurRadius: 10,
+              offset: Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Transform.rotate(
+          angle: car.heading * math.pi / 180,
+          child: const Icon(
+            Icons.directions_car,
+            color: Colors.white,
+            size: 25,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+List<_NearbyCarMarker> _nearbyCars(
+  LatLng userPoint,
+  List<TripLocationModel> locations,
+) {
+  final now = DateTime.now();
+  final cars = <_NearbyCarMarker>[];
+  for (final location in locations) {
+    if (now.difference(location.updatedAt) > const Duration(minutes: 3)) {
+      continue;
+    }
+    final point = LatLng(location.latitude, location.longitude);
+    final distanceMeters = const Distance().as(
+      LengthUnit.Meter,
+      userPoint,
+      point,
+    );
+    if (distanceMeters > _MapPageState._nearbyCarsRadiusMeters) continue;
+    cars.add(
+      _NearbyCarMarker(
+        tripId: location.tripId,
+        point: point,
+        heading: _normalizedHeading(location.heading),
+        distanceMeters: distanceMeters,
+        updatedAt: location.updatedAt,
+      ),
+    );
+  }
+  cars.sort((a, b) => a.distanceMeters.compareTo(b.distanceMeters));
+  return cars;
+}
+
+String _formatNearbyDistance(double meters) {
+  if (meters >= 950) return '${(meters / 1000).toStringAsFixed(1)} km';
+  return '${meters.round()} m';
 }
 
 double _normalizedHeading(double heading) {

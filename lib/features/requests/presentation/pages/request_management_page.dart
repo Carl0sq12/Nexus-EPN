@@ -7,6 +7,7 @@ import '../../../../core/constants/app_colors.dart';
 import '../../../../core/constants/app_strings.dart';
 import '../../../../core/constants/app_text_styles.dart';
 import '../../../../core/widgets/app_state_views.dart';
+import '../../../../core/widgets/app_snackbar.dart';
 import '../../../../core/widgets/custom_button.dart';
 import '../../../../core/widgets/loading_widget.dart';
 import '../../../map/presentation/providers/map_provider.dart';
@@ -89,14 +90,17 @@ class RequestManagementPage extends ConsumerWidget {
                         .acceptRequest(request.id, tripId);
                     if (!context.mounted) return;
                     final nextState = ref.read(requestNotifierProvider);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          nextState.hasError
-                              ? nextState.error.toString()
-                              : AppStrings.requestAccepted,
-                        ),
-                      ),
+                    showAppSnackBar(
+                      context,
+                      title: nextState.hasError
+                          ? 'No se aceptó la solicitud'
+                          : 'Solicitud aceptada',
+                      message: nextState.hasError
+                          ? nextState.error.toString()
+                          : 'El pasajero fue agregado al viaje y recibió la confirmación.',
+                      type: nextState.hasError
+                          ? AppSnackBarType.error
+                          : AppSnackBarType.success,
                     );
                   },
                   onReject: (request) async {
@@ -109,14 +113,17 @@ class RequestManagementPage extends ConsumerWidget {
                         );
                     if (!context.mounted) return;
                     final nextState = ref.read(requestNotifierProvider);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          nextState.hasError
-                              ? nextState.error.toString()
-                              : AppStrings.requestRejected,
-                        ),
-                      ),
+                    showAppSnackBar(
+                      context,
+                      title: nextState.hasError
+                          ? 'No se rechazó la solicitud'
+                          : 'Solicitud rechazada',
+                      message: nextState.hasError
+                          ? nextState.error.toString()
+                          : 'El pasajero recibió la respuesta del conductor.',
+                      type: nextState.hasError
+                          ? AppSnackBarType.error
+                          : AppSnackBarType.info,
                     );
                   },
                 ),

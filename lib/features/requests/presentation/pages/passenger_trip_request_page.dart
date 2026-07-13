@@ -8,6 +8,7 @@ import '../../../../core/constants/app_colors.dart';
 import '../../../../core/constants/app_text_styles.dart';
 import '../../../../core/providers/appwrite_provider.dart';
 import '../../../../core/utils/geo_fare.dart';
+import '../../../../core/widgets/app_snackbar.dart';
 import '../../../../core/widgets/custom_button.dart';
 import '../../../map/domain/entities/route_info.dart';
 import '../../../map/domain/entities/user_location.dart';
@@ -60,22 +61,21 @@ class _PassengerTripRequestPageState
 
   Future<void> _setStopPoint(LatLng point, List<LatLng> routePoints) async {
     if (_stops.length >= _passengerCount) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
+      showAppSnackBar(
+        context,
+        title: 'Límite de paradas alcanzado',
+        message:
             'Ya marcaste $_passengerCount parada(s). Quita una para cambiarla.',
-          ),
-        ),
+        type: AppSnackBarType.info,
       );
       return;
     }
     if (!RouteGeometry.isNearRoute(point, routePoints)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Solo puedes marcar paradas sobre la ruta del conductor',
-          ),
-        ),
+      showAppSnackBar(
+        context,
+        title: 'Parada fuera de ruta',
+        message: 'Solo puedes marcar paradas sobre la ruta del conductor.',
+        type: AppSnackBarType.warning,
       );
       return;
     }
@@ -126,24 +126,30 @@ class _PassengerTripRequestPageState
 
   Future<void> _submit(Trip trip, String passengerId) async {
     if (_stops.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Marca al menos una parada en el mapa')),
+      showAppSnackBar(
+        context,
+        title: 'Marca tu parada',
+        message: 'Selecciona al menos una parada en el mapa.',
+        type: AppSnackBarType.warning,
       );
       return;
     }
     if (_stops.length < _passengerCount) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Marca ${_passengerCount - _stops.length} parada(s) más antes de enviar',
-          ),
-        ),
+      showAppSnackBar(
+        context,
+        title: 'Faltan paradas',
+        message:
+            'Marca ${_passengerCount - _stops.length} parada(s) más antes de enviar.',
+        type: AppSnackBarType.warning,
       );
       return;
     }
     if (_passengerCount > trip.availableSeats) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No hay suficientes cupos disponibles')),
+      showAppSnackBar(
+        context,
+        title: 'Cupos insuficientes',
+        message: 'Este viaje ya no tiene suficientes asientos disponibles.',
+        type: AppSnackBarType.warning,
       );
       return;
     }
@@ -168,13 +174,19 @@ class _PassengerTripRequestPageState
     final state = ref.read(requestNotifierProvider);
     if (!mounted) return;
     if (state.hasError) {
-      ScaffoldMessenger.of(
+      showAppSnackBar(
         context,
-      ).showSnackBar(SnackBar(content: Text(state.error.toString())));
+        title: 'No se envió la solicitud',
+        message: state.error.toString(),
+        type: AppSnackBarType.error,
+      );
       return;
     }
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Solicitud enviada al conductor')),
+    showAppSnackBar(
+      context,
+      title: 'Solicitud enviada',
+      message: 'El conductor recibirá tu solicitud y podrá responderla.',
+      type: AppSnackBarType.success,
     );
     context.pop();
   }
