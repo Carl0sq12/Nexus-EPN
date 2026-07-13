@@ -340,13 +340,13 @@ const COLLECTIONS = [
       { key: 'origin', type: 'string', size: 500, required: true },
       { key: 'destination', type: 'string', size: 500, required: true },
       { key: 'departure_time', type: 'datetime', required: true },
-      { key: 'total_seats', type: 'integer', required: true, min: 1, max: 20 },
+      { key: 'total_seats', type: 'integer', required: true, min: 1, max: 4 },
       {
         key: 'available_seats',
         type: 'integer',
         required: true,
         min: 0,
-        max: 20,
+        max: 4,
       },
       { key: 'price_per_seat', type: 'float', required: true, min: 0 },
       {

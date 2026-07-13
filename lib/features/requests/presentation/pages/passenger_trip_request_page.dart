@@ -59,6 +59,16 @@ class _PassengerTripRequestPageState
   }
 
   Future<void> _setStopPoint(LatLng point, List<LatLng> routePoints) async {
+    if (_stops.length >= _passengerCount) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Ya marcaste $_passengerCount parada(s). Quita una para cambiarla.',
+          ),
+        ),
+      );
+      return;
+    }
     if (!RouteGeometry.isNearRoute(point, routePoints)) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -83,15 +93,13 @@ class _PassengerTripRequestPageState
     } finally {
       if (mounted) {
         setState(() {
-          _stops
-            ..clear()
-            ..add(
-              TripRequestStop(
-                label: 'Tu parada: $label',
-                latitude: snappedPoint.latitude,
-                longitude: snappedPoint.longitude,
-              ),
-            );
+          _stops.add(
+            TripRequestStop(
+              label: 'Parada ${_stops.length + 1}: $label',
+              latitude: snappedPoint.latitude,
+              longitude: snappedPoint.longitude,
+            ),
+          );
           _syncLegacyStopFields();
           _loadingLabel = false;
         });
@@ -120,6 +128,16 @@ class _PassengerTripRequestPageState
     if (_stops.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Marca al menos una parada en el mapa')),
+      );
+      return;
+    }
+    if (_stops.length < _passengerCount) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Marca ${_passengerCount - _stops.length} parada(s) más antes de enviar',
+          ),
+        ),
       );
       return;
     }
@@ -232,8 +250,15 @@ class _PassengerTripRequestPageState
                     _SeatsCard(
                       seats: _passengerCount,
                       maxSeats: trip.availableSeats,
-                      onChanged: (value) =>
-                          setState(() => _passengerCount = value),
+                      onChanged: (value) {
+                        setState(() {
+                          _passengerCount = value;
+                          if (_stops.length > value) {
+                            _stops.removeRange(value, _stops.length);
+                            _syncLegacyStopFields();
+                          }
+                        });
+                      },
                     ),
                     const SizedBox(height: 12),
                     Container(
@@ -254,7 +279,7 @@ class _PassengerTripRequestPageState
                           Expanded(
                             child: Text(
                               'Antes de solicitar, toca el mapa sobre la ruta del conductor para marcar tu parada. '
-                              'Esa ubicación se enviará al conductor para que apruebe o rechace.',
+                              'Debes marcar una parada por cada cupo solicitado.',
                               style: AppTextStyles.bodySmall.copyWith(
                                 color: AppColors.primary,
                               ),
@@ -266,7 +291,7 @@ class _PassengerTripRequestPageState
                     const SizedBox(height: 12),
                     _StopField(
                       icon: Icons.flag_outlined,
-                      label: 'TU PARADA',
+                      label: 'ÚLTIMA PARADA MARCADA',
                       controller: _dropoffController,
                     ),
                     if (_stops.isNotEmpty) ...[
@@ -304,12 +329,15 @@ class _PassengerTripRequestPageState
                 top: false,
                 child: CustomButton(
                   label: _stops.isEmpty
-                      ? 'Marca tu parada para continuar'
+                      ? 'Marca tus paradas para continuar'
+                      : _stops.length < _passengerCount
+                      ? 'Marca ${_passengerCount - _stops.length} parada(s) más'
                       : 'Enviar solicitud',
                   isLoading: requestState.isLoading,
-                  onPressed: userId == null ||
+                  onPressed:
+                      userId == null ||
                           requestState.isLoading ||
-                          _stops.isEmpty
+                          _stops.length < _passengerCount
                       ? null
                       : () => _submit(trip, userId),
                 ),
@@ -565,7 +593,7 @@ class _StopsMapCard extends StatelessWidget {
           Text(
             loadingLabel
                 ? 'Buscando dirección...'
-                : 'Toca la ruta para elegir tu única parada.',
+                : 'Toca la ruta para marcar una parada por cada cupo.',
             style: AppTextStyles.bodySmall.copyWith(
               color: AppColors.textSecondary,
             ),

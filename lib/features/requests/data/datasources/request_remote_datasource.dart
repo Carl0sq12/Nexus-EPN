@@ -16,21 +16,64 @@ class RequestRemoteDatasource {
 
   String get _db => AppwriteConfig.databaseId;
   String get _col => AppwriteConfig.collectionTripRequests;
-  String get _tripsCol => AppwriteConfig.collectionTrips;
 
   Future<List<TripRequestModel>> getRequestsByTripId(String tripId) async {
     try {
       final response = await databases.listDocuments(
         databaseId: _db,
         collectionId: _col,
-        queries: [
-          Query.equal('trip_id', tripId),
-          Query.orderAsc(r'$createdAt'),
-        ],
+        queries: [Query.equal('trip_id', tripId), Query.limit(100)],
       );
-      return response.documents
+      final requests = response.documents
           .map((d) => TripRequestModel.fromJson(normalizeDocument(d)))
           .toList();
+      requests.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      return requests;
+    } catch (e) {
+      throw ServerException(e.toString());
+    }
+  }
+
+  Future<List<TripRequestModel>> getRequestsByTripIds(
+    Iterable<String> tripIds,
+  ) async {
+    final ids = tripIds.where((id) => id.trim().isNotEmpty).toSet().toList();
+    if (ids.isEmpty) return const [];
+
+    try {
+      const chunkSize = 25;
+      const pageSize = 100;
+      final requests = <TripRequestModel>[];
+
+      for (var start = 0; start < ids.length; start += chunkSize) {
+        final end = (start + chunkSize).clamp(0, ids.length);
+        final chunk = ids.sublist(start, end);
+        var offset = 0;
+
+        while (true) {
+          final response = await databases.listDocuments(
+            databaseId: _db,
+            collectionId: _col,
+            queries: [
+              Query.equal('trip_id', chunk),
+              Query.limit(pageSize),
+              Query.offset(offset),
+            ],
+          );
+
+          requests.addAll(
+            response.documents.map(
+              (d) => TripRequestModel.fromJson(normalizeDocument(d)),
+            ),
+          );
+
+          if (response.documents.length < pageSize) break;
+          offset += pageSize;
+        }
+      }
+
+      requests.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      return requests;
     } catch (e) {
       throw ServerException(e.toString());
     }
@@ -175,17 +218,16 @@ class RequestRemoteDatasource {
       final response = await databases.listDocuments(
         databaseId: _db,
         collectionId: _col,
-        queries: [
-          Query.equal('passenger_id', passengerId),
-          Query.orderDesc(r'$createdAt'),
-        ],
+        queries: [Query.equal('passenger_id', passengerId), Query.limit(100)],
       );
 
       // Keep pending / proposed / accepted / rejected for passenger history.
-      return response.documents
+      final requests = response.documents
           .map((d) => TripRequestModel.fromJson(normalizeDocument(d)))
           .where((request) => request.status != 'cancelled')
           .toList();
+      requests.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      return requests;
     } catch (e) {
       throw ServerException(e.toString());
     }

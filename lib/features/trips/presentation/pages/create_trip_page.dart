@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../../../core/constants/app_colors.dart';
+import '../../../../core/constants/app_limits.dart';
 import '../../../../core/constants/app_text_styles.dart';
 
 import '../../../../core/providers/appwrite_provider.dart';
@@ -101,7 +102,7 @@ class _CreateTripPageState extends ConsumerState<CreateTripPage> {
         _originController.text = trip.origin;
         _destinationController.text = trip.destination;
         _priceController.text = trip.pricePerSeat.toStringAsFixed(2);
-        _seats = trip.totalSeats;
+        _seats = trip.totalSeats.clamp(1, AppLimits.maxTripSeats).toInt();
         _selectedDate = DateTime(
           trip.departureTime.year,
           trip.departureTime.month,
@@ -524,6 +525,14 @@ class _CreateTripPageState extends ConsumerState<CreateTripPage> {
                 return;
               }
               if (userId == null) return;
+              if (_seats > AppLimits.maxTripSeats) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Máximo 4 asientos disponibles por viaje'),
+                  ),
+                );
+                return;
+              }
               if (!_isEditing) {
                 final vehicle = await ref.read(
                   myVehicleProvider(userId).future,
@@ -1177,12 +1186,14 @@ class _SeatsStepper extends StatelessWidget {
                 ),
               ),
               GestureDetector(
-                onTap: seats < 8 ? () => onChanged(seats + 1) : null,
+                onTap: seats < AppLimits.maxTripSeats
+                    ? () => onChanged(seats + 1)
+                    : null,
                 child: Container(
                   width: 48,
                   height: 48,
                   decoration: BoxDecoration(
-                    color: seats < 8
+                    color: seats < AppLimits.maxTripSeats
                         ? AppColors.primary
                         : AppColors.outlineVariant,
                     shape: BoxShape.circle,

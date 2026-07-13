@@ -1,4 +1,5 @@
 import '../../domain/entities/trip.dart';
+import '../../../../core/constants/app_limits.dart';
 import '../../../../core/utils/geo_fare.dart';
 import 'package:latlong2/latlong.dart';
 
@@ -41,14 +42,25 @@ class TripModel extends Trip {
        );
 
   factory TripModel.fromJson(Map<String, dynamic> json) {
+    final rawTotalSeats = (json['total_seats'] as num).toInt();
+    final rawAvailableSeats = (json['available_seats'] as num).toInt();
+    final occupiedSeats = (rawTotalSeats - rawAvailableSeats).clamp(
+      0,
+      rawTotalSeats,
+    );
+    final totalSeats = rawTotalSeats.clamp(1, AppLimits.maxTripSeats).toInt();
+    final availableSeats = (totalSeats - occupiedSeats)
+        .clamp(0, totalSeats)
+        .toInt();
+
     return TripModel(
       id: (json['id'] ?? json[r'$id']) as String,
       driverId: json['driver_id'] as String,
       origin: json['origin'] as String? ?? '',
       destination: json['destination'] as String? ?? '',
       departureTime: DateTime.parse(json['departure_time'] as String),
-      totalSeats: (json['total_seats'] as num).toInt(),
-      availableSeats: (json['available_seats'] as num).toInt(),
+      totalSeats: totalSeats,
+      availableSeats: availableSeats,
       pricePerSeat: (json['price_per_seat'] as num).toDouble(),
       status: json['status'] as String? ?? 'active',
       originLatitude: (json['origin_latitude'] as num?)?.toDouble(),

@@ -713,7 +713,7 @@ class _MetricTile extends StatelessWidget {
   }
 }
 
-class _MapSection extends StatelessWidget {
+class _MapSection extends StatefulWidget {
   final AsyncValue<dynamic> locationAsync;
   final VoidCallback onRetryLocation;
 
@@ -722,7 +722,23 @@ class _MapSection extends StatelessWidget {
     required this.onRetryLocation,
   });
 
+  @override
+  State<_MapSection> createState() => _MapSectionState();
+}
+
+class _MapSectionState extends State<_MapSection> {
+  final MapController _mapController = MapController();
+
   static const _epnLocation = LatLng(-0.2106, -78.4889);
+
+  void _centerOnMe() {
+    final location = widget.locationAsync.asData?.value;
+    if (location == null) {
+      widget.onRetryLocation();
+      return;
+    }
+    _mapController.move(LatLng(location.latitude, location.longitude), 16);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -750,7 +766,7 @@ class _MapSection extends StatelessWidget {
                   child: Text('Mapa cercano', style: AppTextStyles.titleMedium),
                 ),
                 InkWell(
-                  onTap: onRetryLocation,
+                  onTap: widget.onRetryLocation,
                   child: Text(
                     'Ubicación actual',
                     style: AppTextStyles.bodySmall.copyWith(
@@ -764,27 +780,46 @@ class _MapSection extends StatelessWidget {
           ),
           SizedBox(
             height: 260,
-            child: locationAsync.when(
-              loading: () => const _MapPlaceholder(
-                icon: Icons.my_location,
-                label: AppStrings.loadingLocation,
-              ),
-              error: (_, _) => _MapPreview(
-                center: _epnLocation,
-                icon: Icons.school_outlined,
-                label: 'EPN',
-                helperText:
-                    'Activa la ubicación para ver tu posición actual. Toca para reintentar.',
-                onTap: onRetryLocation,
-              ),
-              data: (location) {
-                final center = LatLng(location.latitude, location.longitude);
-                return _MapPreview(
-                  center: center,
-                  icon: Icons.person_pin_circle,
-                  label: 'Tu ubicación',
-                );
-              },
+            child: Stack(
+              children: [
+                widget.locationAsync.when(
+                  loading: () => const _MapPlaceholder(
+                    icon: Icons.my_location,
+                    label: AppStrings.loadingLocation,
+                  ),
+                  error: (_, _) => _MapPreview(
+                    mapController: _mapController,
+                    center: _epnLocation,
+                    icon: Icons.school_outlined,
+                    label: 'EPN',
+                    helperText:
+                        'Activa la ubicación para ver tu posición actual. Toca para reintentar.',
+                    onTap: widget.onRetryLocation,
+                  ),
+                  data: (location) {
+                    final center = LatLng(location.latitude, location.longitude);
+                    return _MapPreview(
+                      mapController: _mapController,
+                      center: center,
+                      icon: Icons.person_pin_circle,
+                      label: 'Tu ubicación',
+                    );
+                  },
+                ),
+                Positioned(
+                  right: 12,
+                  bottom: 12,
+                  child: FloatingActionButton.small(
+                    heroTag: 'home_locate_me',
+                    backgroundColor: AppColors.surface,
+                    onPressed: _centerOnMe,
+                    child: const Icon(
+                      Icons.my_location,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -794,6 +829,7 @@ class _MapSection extends StatelessWidget {
 }
 
 class _MapPreview extends StatelessWidget {
+  final MapController mapController;
   final LatLng center;
   final IconData icon;
   final String label;
@@ -801,6 +837,7 @@ class _MapPreview extends StatelessWidget {
   final VoidCallback? onTap;
 
   const _MapPreview({
+    required this.mapController,
     required this.center,
     required this.icon,
     required this.label,
@@ -813,6 +850,7 @@ class _MapPreview extends StatelessWidget {
     return Stack(
       children: [
         FlutterMap(
+          mapController: mapController,
           options: MapOptions(
             initialCenter: center,
             initialZoom: 15,

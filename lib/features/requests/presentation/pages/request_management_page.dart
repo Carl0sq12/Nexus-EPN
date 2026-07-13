@@ -6,6 +6,7 @@ import 'package:latlong2/latlong.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/constants/app_strings.dart';
 import '../../../../core/constants/app_text_styles.dart';
+import '../../../../core/widgets/app_state_views.dart';
 import '../../../../core/widgets/custom_button.dart';
 import '../../../../core/widgets/loading_widget.dart';
 import '../../../map/presentation/providers/map_provider.dart';
@@ -36,7 +37,11 @@ class RequestManagementPage extends ConsumerWidget {
       ),
       body: requestsAsync.when(
         loading: () => const LoadingWidget(),
-        error: (e, _) => Center(child: Text(e.toString())),
+        error: (_, _) => AppErrorView(
+          message:
+              'No pudimos cargar las solicitudes de este viaje. Revisa tu conexión e inténtalo de nuevo.',
+          onRetry: () => ref.invalidate(requestsByTripProvider(tripId)),
+        ),
         data: (requests) {
           final pending = requests
               .where((request) => request.status == AppStrings.statusPending)

@@ -245,40 +245,28 @@ class _PassengerTripsList extends ConsumerWidget {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Row(
-                                    children: [
-                                      Text(
-                                        trip.origin,
-                                        style: AppTextStyles.bodyMedium
-                                            .copyWith(
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                      ),
-                                      const SizedBox(width: 6),
-                                      const Icon(
-                                        Icons.arrow_forward,
-                                        size: 14,
-                                        color: AppColors.primaryMid,
-                                      ),
-                                      const SizedBox(width: 6),
-                                      Text(
-                                        trip.destination,
-                                        style: AppTextStyles.bodyMedium
-                                            .copyWith(
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                      ),
-                                    ],
+                                  Text(
+                                    '${trip.origin} → ${trip.destination}',
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: AppTextStyles.bodyMedium.copyWith(
+                                      fontWeight: FontWeight.w700,
+                                      height: 1.2,
+                                    ),
                                   ),
                                   const SizedBox(height: 4),
                                   Text(time, style: AppTextStyles.labelSmall),
                                   const SizedBox(height: 4),
                                   Text(
                                     'Conductor: $driverName',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
                                     style: AppTextStyles.bodySmall,
                                   ),
                                   Text(
                                     'Ubicación aproximada: ${trip.origin}',
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
                                     style: AppTextStyles.bodySmall.copyWith(
                                       color: AppColors.textSecondary,
                                     ),
@@ -286,6 +274,7 @@ class _PassengerTripsList extends ConsumerWidget {
                                 ],
                               ),
                             ),
+                            const SizedBox(width: 10),
                             Container(
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 12,
@@ -306,13 +295,15 @@ class _PassengerTripsList extends ConsumerWidget {
                         ),
                         const SizedBox(height: 20),
                         // Route line with stops
-                        SizedBox(
-                          height: 72,
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(minHeight: 116),
                           child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               // Vertical line with dots
                               SizedBox(
                                 width: 28,
+                                height: 112,
                                 child: Column(
                                   children: [
                                     Container(
@@ -357,15 +348,21 @@ class _PassengerTripsList extends ConsumerWidget {
                                   children: [
                                     Text(
                                       trip.origin,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
                                       style: AppTextStyles.bodyMedium.copyWith(
                                         fontWeight: FontWeight.w600,
+                                        height: 1.25,
                                       ),
                                     ),
-                                    const Spacer(),
+                                    const SizedBox(height: 12),
                                     Text(
                                       trip.destination,
+                                      maxLines: 3,
+                                      overflow: TextOverflow.ellipsis,
                                       style: AppTextStyles.bodyMedium.copyWith(
                                         fontWeight: FontWeight.w600,
+                                        height: 1.25,
                                       ),
                                     ),
                                   ],
@@ -433,9 +430,8 @@ class _PassengerTripsList extends ConsumerWidget {
                                   height: 44,
                                   child: ElevatedButton(
                                     onPressed: activeRequest == null
-                                        ? () => context.push(
-                                            '/trips/${trip.id}',
-                                          )
+                                        ? () =>
+                                              context.push('/trips/${trip.id}')
                                         : () async {
                                             await ref
                                                 .read(

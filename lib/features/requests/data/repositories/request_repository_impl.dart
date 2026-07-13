@@ -21,6 +21,17 @@ class RequestRepositoryImpl implements RequestRepository {
   }
 
   @override
+  Future<List<TripRequest>> getRequestsForTrips(
+    Iterable<String> tripIds,
+  ) async {
+    try {
+      return await remoteDatasource.getRequestsByTripIds(tripIds);
+    } catch (e) {
+      throw ServerException(e.toString());
+    }
+  }
+
+  @override
   Future<List<TripRequest>> getMyRequests(String passengerId) async {
     try {
       return await remoteDatasource.getMyRequests(passengerId);

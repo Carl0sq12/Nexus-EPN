@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
@@ -35,6 +36,10 @@ final currentLocationProvider = FutureProvider<UserLocation>((ref) {
 });
 
 /// Streams the device location while an in-app trip is in progress.
+///
+/// Uses a high-frequency, high-accuracy navigation profile (similar to
+/// turn-by-turn apps): short distance filter + short update interval so the
+/// driver marker moves fluidly instead of jumping every few meters.
 final currentLocationStreamProvider = StreamProvider<UserLocation>((
   ref,
 ) async* {
@@ -46,12 +51,28 @@ final currentLocationStreamProvider = StreamProvider<UserLocation>((
     heading: initialPosition.heading,
   );
 
-  yield* Geolocator.getPositionStream(
-    locationSettings: const LocationSettings(
-      accuracy: LocationAccuracy.high,
-      distanceFilter: 10,
-    ),
-  ).map(
+  final LocationSettings settings;
+  if (Platform.isAndroid) {
+    settings = AndroidSettings(
+      accuracy: LocationAccuracy.bestForNavigation,
+      distanceFilter: 2,
+      intervalDuration: const Duration(milliseconds: 700),
+    );
+  } else if (Platform.isIOS || Platform.isMacOS) {
+    settings = AppleSettings(
+      accuracy: LocationAccuracy.bestForNavigation,
+      activityType: ActivityType.automotiveNavigation,
+      distanceFilter: 2,
+      pauseLocationUpdatesAutomatically: false,
+    );
+  } else {
+    settings = const LocationSettings(
+      accuracy: LocationAccuracy.bestForNavigation,
+      distanceFilter: 2,
+    );
+  }
+
+  yield* Geolocator.getPositionStream(locationSettings: settings).map(
     (position) => UserLocation(
       latitude: position.latitude,
       longitude: position.longitude,

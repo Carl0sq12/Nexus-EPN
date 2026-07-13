@@ -6,7 +6,6 @@ import '../constants/app_strings.dart';
 import '../constants/app_colors.dart';
 import '../providers/session_data_provider.dart';
 import '../providers/appwrite_provider.dart';
-import '../../features/profile/presentation/providers/profile_provider.dart';
 
 // Real pages
 import '../../features/auth/presentation/pages/splash_page.dart';
@@ -41,6 +40,7 @@ import '../../features/chat/presentation/pages/chat_page.dart';
 import '../../features/chat/presentation/pages/chat_list_page.dart';
 import '../../features/map/presentation/pages/map_page.dart';
 import '../../features/sos/presentation/pages/sos_page.dart';
+import '../../features/sos/presentation/widgets/global_sos_fab.dart';
 import '../../features/notifications/presentation/pages/notifications_page.dart';
 import '../../features/notifications/presentation/pages/security_settings_page.dart';
 import '../../features/trips/presentation/pages/passenger_history_page.dart';
@@ -63,7 +63,8 @@ final routerProvider = Provider<GoRouter>((ref) {
       final onAuthRoute = state.matchedLocation.startsWith('/auth');
       final onOnboardingRoute = state.matchedLocation.startsWith('/onboarding');
       final onSplash = state.matchedLocation == AppStrings.routeSplash;
-      final onHome = state.matchedLocation == AppStrings.routeHome ||
+      final onHome =
+          state.matchedLocation == AppStrings.routeHome ||
           state.matchedLocation.startsWith('/home');
 
       if (isLoadingSession) {
@@ -188,9 +189,8 @@ final routerProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: AppStrings.routeTrips,
-            builder: (context, state) => TripsListPage(
-              destinationQuery: state.uri.queryParameters['q'],
-            ),
+            builder: (context, state) =>
+                TripsListPage(destinationQuery: state.uri.queryParameters['q']),
             routes: [
               GoRoute(
                 path: 'search',
@@ -320,19 +320,11 @@ class MainShell extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final location = GoRouterState.of(context).matchedLocation;
-    final userId = ref.watch(currentUserIdProvider);
-    final isDriver = userId == null
-        ? false
-        : ref.watch(profileProvider(userId)).maybeWhen(
-              data: (profile) => profile.role == AppStrings.roleDriver,
-              orElse: () => false,
-            );
 
     // Passengers use the header solicitudes icon; bottom nav has no Solicitudes tab.
     final navRoutes = <String>[
       AppStrings.routeHome,
-      if (isDriver) AppStrings.routeTrips,
-      AppStrings.routeSos,
+      AppStrings.routeTrips,
       AppStrings.routeChat,
       AppStrings.routeProfile,
     ];
@@ -345,14 +337,9 @@ class MainShell extends ConsumerWidget {
         icon: Icon(Icons.home_outlined),
         label: 'Inicio',
       ),
-      if (isDriver)
-        const BottomNavigationBarItem(
-          icon: Icon(Icons.directions_car_outlined),
-          label: 'Viajes',
-        ),
       const BottomNavigationBarItem(
-        icon: Icon(Icons.emergency_outlined),
-        label: 'Auxilio',
+        icon: Icon(Icons.directions_car_outlined),
+        label: 'Viajes',
       ),
       const BottomNavigationBarItem(
         icon: Icon(Icons.chat_bubble_outline),
@@ -365,7 +352,12 @@ class MainShell extends ConsumerWidget {
     ];
 
     return Scaffold(
-      body: child,
+      body: Stack(
+        children: [
+          Positioned.fill(child: child),
+          if (location != AppStrings.routeSos) const GlobalSosFab(),
+        ],
+      ),
       bottomNavigationBar: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(

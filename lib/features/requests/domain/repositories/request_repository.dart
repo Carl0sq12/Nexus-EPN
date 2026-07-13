@@ -5,6 +5,9 @@ abstract class RequestRepository {
   /// Returns all requests for a specific trip.
   Future<List<TripRequest>> getRequestsForTrip(String tripId);
 
+  /// Returns all requests associated with any of the provided trips.
+  Future<List<TripRequest>> getRequestsForTrips(Iterable<String> tripIds);
+
   /// Returns all requests made by a specific passenger.
   Future<List<TripRequest>> getMyRequests(String passengerId);
 

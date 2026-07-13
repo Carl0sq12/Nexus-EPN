@@ -35,7 +35,11 @@ class DriverRequestsPage extends ConsumerWidget {
       ),
       body: incomingAsync.when(
         loading: () => const LoadingWidget(),
-        error: (e, _) => Center(child: Text(e.toString())),
+        error: (_, _) => AppErrorView(
+          message:
+              'No pudimos cargar tus solicitudes. Revisa tu conexión e inténtalo de nuevo.',
+          onRetry: () => ref.invalidate(driverIncomingRequestsProvider(userId)),
+        ),
         data: (items) {
           if (items.isEmpty) {
             return Center(
@@ -64,8 +68,11 @@ class DriverRequestsPage extends ConsumerWidget {
                 final item = items[index];
                 final request = item.request;
                 final trip = item.trip;
-                final time = DateFormat('dd/MM HH:mm').format(trip.departureTime);
-                final statusLabel = request.status == AppStrings.statusPriceProposed
+                final time = DateFormat(
+                  'dd/MM HH:mm',
+                ).format(trip.departureTime);
+                final statusLabel =
+                    request.status == AppStrings.statusPriceProposed
                     ? 'Precio propuesto'
                     : 'Pendiente';
 

@@ -5,11 +5,7 @@ import '../../../../core/constants/app_colors.dart';
 import '../../../../core/constants/app_text_styles.dart';
 import '../../../../core/constants/app_strings.dart';
 import '../../../../core/providers/appwrite_provider.dart';
-import '../../../map/presentation/providers/map_provider.dart';
-import '../../../notifications/presentation/providers/notification_provider.dart';
-import '../../../profile/presentation/providers/profile_provider.dart';
-import '../providers/emergency_contacts_provider.dart';
-import '../providers/sos_provider.dart';
+import '../utils/sos_actions.dart';
 import '../widgets/sos_button.dart';
 
 class SosPage extends ConsumerStatefulWidget {
@@ -89,53 +85,22 @@ class _SosPageState extends ConsumerState<SosPage> {
               onSosTriggered: () async {
                 if (userId == null) return;
                 try {
-                  final location = await ref.read(
-                    currentLocationProvider.future,
+                  final result = await sendSosWithNotifications(
+                    ref,
+                    userId: userId,
+                    alertLabel: _selectedLabel,
+                    alertType: _selectedType,
                   );
-                  await ref.read(sosNotifierProvider.notifier).sendSosAlert(
-                        userId,
-                        location.latitude,
-                        location.longitude,
-                        _selectedLabel,
-                        _selectedType,
-                      );
                   if (!context.mounted) return;
-                  final sosState = ref.read(sosNotifierProvider);
-                  if (sosState.hasError) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text(sosState.error.toString())),
-                    );
-                    return;
-                  }
-
-                  try {
-                    final notified = await _notifyEmergencyContactsInApp(
-                      ref,
-                      userId,
-                      location.latitude,
-                      location.longitude,
-                      _selectedLabel,
-                    );
-                    if (!context.mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          notified == 0
-                              ? 'SOS guardado. Ningún contacto tiene la app con ese número.'
-                              : 'SOS enviado a $notified contacto(s) en la app',
-                        ),
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        result.notifiedContacts == 0
+                            ? 'SOS guardado. Ningún contacto tiene la app con ese número.'
+                            : 'SOS enviado a ${result.notifiedContacts} contacto(s) en la app',
                       ),
-                    );
-                  } catch (notifyError) {
-                    if (!context.mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          'SOS guardado, pero no se pudo notificar contactos: $notifyError',
-                        ),
-                      ),
-                    );
-                  }
+                    ),
+                  );
                 } catch (e) {
                   if (context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
@@ -211,59 +176,4 @@ class _SosTypeButton extends StatelessWidget {
       ),
     );
   }
-}
-
-/// Sends in-app notifications (same channel as trip/chat alerts) to emergency
-/// contacts that are registered users matched by phone number.
-Future<int> _notifyEmergencyContactsInApp(
-  WidgetRef ref,
-  String userId,
-  double latitude,
-  double longitude,
-  String alertLabel,
-) async {
-  final contacts = await ref
-      .read(emergencyContactsRepositoryProvider)
-      .getContacts(userId);
-  if (contacts.isEmpty) {
-    throw Exception(
-      'No tienes contactos de emergencia. Agrégalos en tu perfil.',
-    );
-  }
-
-  final profile = await ref.read(profileProvider(userId).future);
-  final mapsLink =
-      'https://www.google.com/maps/search/?api=1&query=$latitude,$longitude';
-  final now = DateTime.now().toLocal();
-  final timeLabel =
-      '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
-  final body =
-      '${profile.fullName} activó SOS ($alertLabel).\n'
-      'Ubicación en tiempo real: $mapsLink\n'
-      'Coords: ${latitude.toStringAsFixed(5)}, ${longitude.toStringAsFixed(5)} · $timeLabel';
-
-  final notificationDs = ref.read(notificationRemoteDatasourceProvider);
-  final profileRepo = ref.read(profileRepositoryProvider);
-  final notifiedIds = <String>{};
-  var notified = 0;
-
-  for (final contact in contacts) {
-    final matched = await profileRepo.findByPhone(contact.phone);
-    if (matched == null) continue;
-    if (matched.id == userId) continue;
-    if (notifiedIds.contains(matched.id)) continue;
-
-    await notificationDs.create(
-      userId: matched.id,
-      title: 'SOS · $alertLabel',
-      body: body,
-      type: 'sos',
-      relatedId: userId,
-    );
-    ref.invalidate(notificationsProvider(matched.id));
-    notifiedIds.add(matched.id);
-    notified++;
-  }
-
-  return notified;
 }

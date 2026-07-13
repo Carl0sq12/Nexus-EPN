@@ -31,11 +31,21 @@ class TripDetailPage extends ConsumerStatefulWidget {
 }
 
 class _TripDetailPageState extends ConsumerState<TripDetailPage> {
-  TripRequestStop? _pendingStop;
+  final List<TripRequestStop> _pendingStops = [];
   bool _loadingStopLabel = false;
   int _passengerCount = 1;
 
   Future<void> _markStopOnRoute(LatLng point, List<LatLng> routePoints) async {
+    if (_pendingStops.length >= _passengerCount) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Ya marcaste $_passengerCount parada(s). Quita una para cambiarla.',
+          ),
+        ),
+      );
+      return;
+    }
     if (routePoints.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('La ruta aún se está cargando')),
@@ -62,22 +72,31 @@ class _TripDetailPageState extends ConsumerState<TripDetailPage> {
     } catch (_) {}
     if (!mounted) return;
     setState(() {
-      _pendingStop = TripRequestStop(
-        label: 'Tu parada: $label',
-        latitude: snapped.latitude,
-        longitude: snapped.longitude,
+      _pendingStops.add(
+        TripRequestStop(
+          label: 'Parada ${_pendingStops.length + 1}: $label',
+          latitude: snapped.latitude,
+          longitude: snapped.longitude,
+        ),
       );
       _loadingStopLabel = false;
     });
   }
 
   Future<void> _sendRequest(Trip trip, String userId) async {
-    final stop = _pendingStop;
-    if (stop == null) {
+    if (_pendingStops.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
+          content: Text('Primero marca tu parada tocando la ruta en el mapa'),
+        ),
+      );
+      return;
+    }
+    if (_pendingStops.length < _passengerCount) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
           content: Text(
-            'Primero marca tu parada tocando la ruta en el mapa',
+            'Marca ${_passengerCount - _pendingStops.length} parada(s) más antes de enviar',
           ),
         ),
       );
@@ -90,29 +109,33 @@ class _TripDetailPageState extends ConsumerState<TripDetailPage> {
       return;
     }
 
-    await ref.read(requestNotifierProvider.notifier).sendRequest(
+    final firstStop = _pendingStops.first;
+    final lastStop = _pendingStops.last;
+    await ref
+        .read(requestNotifierProvider.notifier)
+        .sendRequest(
           trip.id,
           userId,
           passengerCount: _passengerCount,
-          pickupNote: stop.label,
-          dropoffNote: stop.label,
-          pickupLatitude: stop.latitude,
-          pickupLongitude: stop.longitude,
-          dropoffLatitude: stop.latitude,
-          dropoffLongitude: stop.longitude,
-          stops: [stop],
+          pickupNote: firstStop.label,
+          dropoffNote: lastStop.label,
+          pickupLatitude: firstStop.latitude,
+          pickupLongitude: firstStop.longitude,
+          dropoffLatitude: lastStop.latitude,
+          dropoffLongitude: lastStop.longitude,
+          stops: List<TripRequestStop>.of(_pendingStops),
         );
 
     if (!mounted) return;
     final state = ref.read(requestNotifierProvider);
     if (state.hasError) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(state.error.toString())),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(state.error.toString())));
       return;
     }
     setState(() {
-      _pendingStop = null;
+      _pendingStops.clear();
       _passengerCount = 1;
     });
     ScaffoldMessenger.of(context).showSnackBar(
@@ -197,9 +220,7 @@ class _TripDetailPageState extends ConsumerState<TripDetailPage> {
                         .toList()
                   : (requestForTrip?.stops.isNotEmpty == true
                         ? requestForTrip!.stops
-                        : (_pendingStop != null
-                              ? <TripRequestStop>[_pendingStop!]
-                              : const <TripRequestStop>[]));
+                        : _pendingStops);
 
               return SingleChildScrollView(
                 padding: const EdgeInsets.all(16),
@@ -220,9 +241,9 @@ class _TripDetailPageState extends ConsumerState<TripDetailPage> {
                             borderRadius: BorderRadius.circular(14),
                           ),
                           child: Text(
-                            _pendingStop == null
-                                ? 'Toca la línea azul del mapa para marcar tu parada antes de solicitar el cupo.'
-                                : 'Parada marcada. Ya puedes solicitar el cupo.',
+                            _pendingStops.length < _passengerCount
+                                ? 'Toca la línea azul para marcar una parada por cada cupo solicitado.'
+                                : 'Paradas marcadas. Ya puedes solicitar el cupo.',
                             style: AppTextStyles.bodySmall.copyWith(
                               color: AppColors.primary,
                             ),
@@ -266,11 +287,20 @@ class _TripDetailPageState extends ConsumerState<TripDetailPage> {
                           seats: _passengerCount,
                           maxSeats: trip.availableSeats,
                           pricePerSeat: trip.pricePerSeat,
-                          onChanged: (value) =>
-                              setState(() => _passengerCount = value),
+                          onChanged: (value) {
+                            setState(() {
+                              _passengerCount = value;
+                              if (_pendingStops.length > value) {
+                                _pendingStops.removeRange(
+                                  value,
+                                  _pendingStops.length,
+                                );
+                              }
+                            });
+                          },
                         ),
                         const SizedBox(height: 12),
-                        if (_pendingStop != null)
+                        if (_pendingStops.isNotEmpty)
                           Container(
                             width: double.infinity,
                             padding: const EdgeInsets.all(12),
@@ -280,44 +310,57 @@ class _TripDetailPageState extends ConsumerState<TripDetailPage> {
                               borderRadius: BorderRadius.circular(14),
                               border: Border.all(color: AppColors.outline),
                             ),
-                            child: Row(
+                            child: Column(
                               children: [
-                                const Icon(
-                                  Icons.flag_outlined,
-                                  color: AppColors.primary,
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: Text(
-                                    _pendingStop!.label,
-                                    style: AppTextStyles.bodySmall,
+                                for (var i = 0; i < _pendingStops.length; i++)
+                                  Row(
+                                    children: [
+                                      CircleAvatar(
+                                        radius: 12,
+                                        backgroundColor: AppColors.primary,
+                                        child: Text(
+                                          '${i + 1}',
+                                          style: AppTextStyles.caption.copyWith(
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: Text(
+                                          _pendingStops[i].label,
+                                          style: AppTextStyles.bodySmall,
+                                        ),
+                                      ),
+                                      IconButton(
+                                        tooltip: 'Quitar parada',
+                                        onPressed: () => setState(
+                                          () => _pendingStops.removeAt(i),
+                                        ),
+                                        icon: const Icon(Icons.close),
+                                      ),
+                                    ],
                                   ),
-                                ),
-                                IconButton(
-                                  tooltip: 'Quitar parada',
-                                  onPressed: () =>
-                                      setState(() => _pendingStop = null),
-                                  icon: const Icon(Icons.close),
-                                ),
                               ],
                             ),
                           ),
                         CustomButton(
                           label: requestState.isLoading
                               ? 'Enviando...'
-                              : (_pendingStop == null
-                                    ? 'Marca tu parada en el mapa'
+                              : (_pendingStops.length < _passengerCount
+                                    ? 'Marca ${_passengerCount - _pendingStops.length} parada(s) más'
                                     : 'Enviar solicitud'),
                           isLoading: requestState.isLoading,
-                          onPressed: !requestState.isLoading &&
-                                  _pendingStop != null
+                          onPressed:
+                              !requestState.isLoading &&
+                                  _pendingStops.length >= _passengerCount
                               ? () => _sendRequest(trip, userId)
-                              : _pendingStop == null
+                              : _pendingStops.length < _passengerCount
                               ? () {
                                   ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
+                                    SnackBar(
                                       content: Text(
-                                        'Primero marca tu parada tocando la ruta en el mapa',
+                                        'Marca ${_passengerCount - _pendingStops.length} parada(s) más en la ruta',
                                       ),
                                     ),
                                   );
@@ -491,11 +534,7 @@ Future<void> _completeTrip(
     return;
   }
 
-  final ok = await completeTripWithCleanup(
-    ref,
-    trip: trip,
-    driverId: userId,
-  );
+  final ok = await completeTripWithCleanup(ref, trip: trip, driverId: userId);
   if (!context.mounted) return;
   if (!ok) {
     final state = ref.read(tripNotifierProvider);
@@ -560,10 +599,7 @@ class _PassengerRequestBanner extends ConsumerWidget {
           ],
           if (request.stops.isNotEmpty) ...[
             const SizedBox(height: 8),
-            Text(
-              request.stops.first.label,
-              style: AppTextStyles.bodySmall,
-            ),
+            Text(request.stops.first.label, style: AppTextStyles.bodySmall),
           ],
           const SizedBox(height: 12),
           if (request.status == AppStrings.statusPriceProposed)
@@ -674,10 +710,7 @@ class _TripCompletedBanner extends StatelessWidget {
   final String tripId;
   final bool showReport;
 
-  const _TripCompletedBanner({
-    required this.tripId,
-    required this.showReport,
-  });
+  const _TripCompletedBanner({required this.tripId, required this.showReport});
 
   @override
   Widget build(BuildContext context) {
@@ -752,14 +785,10 @@ class _PassengerSeatPicker extends StatelessWidget {
               ),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Text(
-                  '$seats',
-                  style: AppTextStyles.titleMedium,
-                ),
+                child: Text('$seats', style: AppTextStyles.titleMedium),
               ),
               IconButton.filledTonal(
-                onPressed:
-                    seats < maxSeats ? () => onChanged(seats + 1) : null,
+                onPressed: seats < maxSeats ? () => onChanged(seats + 1) : null,
                 icon: const Icon(Icons.add),
               ),
               const Spacer(),

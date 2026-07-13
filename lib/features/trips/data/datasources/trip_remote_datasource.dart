@@ -1,6 +1,7 @@
 import 'package:appwrite/appwrite.dart';
 
 import '../../../../core/config/appwrite_config.dart';
+import '../../../../core/constants/app_limits.dart';
 import '../../../../core/errors/exceptions.dart';
 import '../../../../core/network/appwrite_helpers.dart';
 import '../models/trip_model.dart';
@@ -80,6 +81,11 @@ class TripRemoteDatasource {
     String? routePoints,
   }) async {
     try {
+      if (totalSeats < 1 || totalSeats > AppLimits.maxTripSeats) {
+        throw const ServerException(
+          'El viaje debe tener entre 1 y 4 asientos disponibles',
+        );
+      }
       final data = <String, dynamic>{
         'driver_id': driverId,
         'origin': origin,
@@ -120,6 +126,20 @@ class TripRemoteDatasource {
     Map<String, dynamic> fields,
   ) async {
     try {
+      final totalSeats = fields['total_seats'];
+      if (totalSeats is num &&
+          (totalSeats < 1 || totalSeats > AppLimits.maxTripSeats)) {
+        throw const ServerException(
+          'El viaje debe tener entre 1 y 4 asientos disponibles',
+        );
+      }
+      final availableSeats = fields['available_seats'];
+      if (availableSeats is num &&
+          (availableSeats < 0 || availableSeats > AppLimits.maxTripSeats)) {
+        throw const ServerException(
+          'El viaje debe tener máximo 4 asientos disponibles',
+        );
+      }
       final doc = await databases.updateDocument(
         databaseId: _db,
         collectionId: _col,
