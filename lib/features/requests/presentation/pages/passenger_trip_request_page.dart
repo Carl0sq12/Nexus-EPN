@@ -733,11 +733,11 @@ class _NumberedMapMarker extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: const BoxDecoration(
-        color: AppColors.success,
+        color: Colors.black,
         shape: BoxShape.circle,
         boxShadow: [
           BoxShadow(
-            color: Color.fromRGBO(13, 111, 148, 0.2),
+            color: Color.fromRGBO(0, 0, 0, 0.25),
             blurRadius: 8,
             offset: Offset(0, 2),
           ),

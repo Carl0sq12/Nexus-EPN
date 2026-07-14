@@ -36,21 +36,14 @@ class SplashPage extends ConsumerWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(
-              width: 80,
-              height: 80,
-              decoration: BoxDecoration(
-                gradient: AppColors.primaryGradient,
-                borderRadius: BorderRadius.circular(20),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color.fromRGBO(13, 111, 148, 0.08),
-                    blurRadius: 12,
-                    offset: Offset(0, 4),
-                  ),
-                ],
+            ClipRRect(
+              borderRadius: BorderRadius.circular(20),
+              child: Image.asset(
+                'assets/images/app_icon.png',
+                width: 96,
+                height: 96,
+                fit: BoxFit.cover,
               ),
-              child: const Icon(Icons.route, color: Colors.white, size: 40),
             ),
             const SizedBox(height: 24),
             Text(AppStrings.appName, style: AppTextStyles.displayLarge),

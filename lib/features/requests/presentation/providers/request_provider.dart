@@ -423,41 +423,58 @@ final requestByIdProvider = FutureProvider.family<TripRequest, String>((
   return ref.watch(requestRepositoryProvider).getRequestById(requestId);
 });
 
-/// Incoming actionable requests for a driver's active trips.
+/// Incoming seat/cupo requests for the signed-in driver (live polling).
 final driverIncomingRequestsProvider =
-    FutureProvider.family<List<DriverIncomingRequest>, String>((
+    StreamProvider.family<List<DriverIncomingRequest>, String>((
       ref,
       driverId,
-    ) async {
-      final trips = await ref.watch(myTripsProvider(driverId).future);
+    ) async* {
       final repository = ref.watch(requestRepositoryProvider);
-      final activeTrips = trips
-          .where(
-            (trip) =>
-                trip.status == AppStrings.statusActive ||
-                trip.status == AppStrings.statusFull ||
-                trip.status == AppStrings.statusInProgress,
-          )
-          .toList();
-      final tripsById = {for (final trip in activeTrips) trip.id: trip};
+      final tripRepository = ref.watch(tripRepositoryProvider);
+      List<DriverIncomingRequest>? lastGood;
 
-      final incoming = <DriverIncomingRequest>[];
-      final requests = await repository.getRequestsForTrips(tripsById.keys);
-      for (final request in requests) {
-        final trip = tripsById[request.tripId];
-        if (trip == null) continue;
-        if (request.status == AppStrings.statusPending ||
-            request.status == AppStrings.statusPriceProposed) {
-          incoming.add(DriverIncomingRequest(trip: trip, request: request));
+      while (true) {
+        try {
+          final trips = await tripRepository.getMyTrips(driverId);
+          final tripsById = {
+            for (final trip in trips)
+              if (trip.status == AppStrings.statusActive ||
+                  trip.status == AppStrings.statusFull ||
+                  trip.status == AppStrings.statusInProgress)
+                trip.id: trip,
+          };
+          final incoming = <DriverIncomingRequest>[];
+          if (tripsById.isNotEmpty) {
+            final requests = await repository.getRequestsForTrips(
+              tripsById.keys,
+            );
+            for (final request in requests) {
+              final trip = tripsById[request.tripId];
+              if (trip == null) continue;
+              if (request.status == AppStrings.statusPending ||
+                  request.status == AppStrings.statusPriceProposed) {
+                incoming.add(
+                  DriverIncomingRequest(trip: trip, request: request),
+                );
+              }
+            }
+            incoming.sort(
+              (a, b) => b.request.createdAt.compareTo(a.request.createdAt),
+            );
+          }
+          lastGood = incoming;
+          yield incoming;
+        } catch (e, st) {
+          if (lastGood == null) {
+            Error.throwWithStackTrace(e, st);
+          }
+          yield lastGood;
         }
+        await Future<void>.delayed(const Duration(seconds: 3));
       }
-      incoming.sort(
-        (a, b) => b.request.createdAt.compareTo(a.request.createdAt),
-      );
-      return incoming;
     });
 
-/// Unread in-app notifications count.
+/// Unread in-app notifications count (excludes seat/cupo request types).
 final unreadNotificationsCountProvider = Provider.family<int, String>((
   ref,
   userId,

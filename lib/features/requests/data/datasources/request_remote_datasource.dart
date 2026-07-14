@@ -221,10 +221,9 @@ class RequestRemoteDatasource {
         queries: [Query.equal('passenger_id', passengerId), Query.limit(100)],
       );
 
-      // Keep pending / proposed / accepted / rejected for passenger history.
+      // Keep pending / proposed / accepted / rejected / cancelled for passenger.
       final requests = response.documents
           .map((d) => TripRequestModel.fromJson(normalizeDocument(d)))
-          .where((request) => request.status != 'cancelled')
           .toList();
       requests.sort((a, b) => b.createdAt.compareTo(a.createdAt));
       return requests;

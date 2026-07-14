@@ -223,21 +223,14 @@ class _LoginPageState extends ConsumerState<LoginPage> {
             child: Column(
               children: [
                 const SizedBox(height: 40),
-                Container(
-                  width: 72,
-                  height: 72,
-                  decoration: BoxDecoration(
-                    gradient: AppColors.primaryGradient,
-                    borderRadius: BorderRadius.circular(20),
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Color.fromRGBO(13, 111, 148, 0.08),
-                        blurRadius: 12,
-                        offset: Offset(0, 4),
-                      ),
-                    ],
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(20),
+                  child: Image.asset(
+                    'assets/images/app_icon.png',
+                    width: 88,
+                    height: 88,
+                    fit: BoxFit.cover,
                   ),
-                  child: const Icon(Icons.route, color: Colors.white, size: 36),
                 ),
                 const SizedBox(height: 16),
                 Text(

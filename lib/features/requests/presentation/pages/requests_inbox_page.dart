@@ -81,7 +81,7 @@ class _PassengerRequestsPage extends ConsumerStatefulWidget {
 
 class _PassengerRequestsPageState
     extends ConsumerState<_PassengerRequestsPage> {
-  _PassengerRequestFilter _selectedFilter = _PassengerRequestFilter.inProgress;
+  _PassengerRequestFilter _selectedFilter = _PassengerRequestFilter.accepted;
 
   @override
   Widget build(BuildContext context) {
@@ -494,6 +494,12 @@ class _GroupedPassengerRequests {
       .where((item) => _filterForItem(item) == _PassengerRequestFilter.accepted)
       .toList();
 
+  List<_PassengerRequestItem> get cancelled => items
+      .where(
+        (item) => _filterForItem(item) == _PassengerRequestFilter.cancelled,
+      )
+      .toList();
+
   List<_PassengerRequestItem> get pending => items
       .where((item) => _filterForItem(item) == _PassengerRequestFilter.pending)
       .toList();
@@ -506,6 +512,7 @@ class _GroupedPassengerRequests {
     return switch (filter) {
       _PassengerRequestFilter.inProgress => inProgress,
       _PassengerRequestFilter.accepted => accepted,
+      _PassengerRequestFilter.cancelled => cancelled,
       _PassengerRequestFilter.pending => pending,
       _PassengerRequestFilter.finished => finished,
     };
@@ -522,7 +529,13 @@ class _GroupedPassengerRequests {
   }
 }
 
-enum _PassengerRequestFilter { inProgress, accepted, pending, finished }
+enum _PassengerRequestFilter {
+  accepted,
+  cancelled,
+  pending,
+  inProgress,
+  finished,
+}
 
 _PassengerRequestFilter _filterForItem(_PassengerRequestItem item) {
   final request = item.request;
@@ -531,11 +544,13 @@ _PassengerRequestFilter _filterForItem(_PassengerRequestItem item) {
       request.status == AppStrings.statusPriceProposed) {
     return _PassengerRequestFilter.pending;
   }
-  if (request.status == AppStrings.statusRejected ||
-      request.status == AppStrings.statusCancelled ||
-      request.status == AppStrings.statusCompleted ||
-      trip?.status == AppStrings.statusCompleted ||
+  if (request.status == AppStrings.statusCancelled ||
       trip?.status == AppStrings.statusCancelled) {
+    return _PassengerRequestFilter.cancelled;
+  }
+  if (request.status == AppStrings.statusRejected ||
+      request.status == AppStrings.statusCompleted ||
+      trip?.status == AppStrings.statusCompleted) {
     return _PassengerRequestFilter.finished;
   }
   if (request.status == AppStrings.statusAccepted &&
@@ -641,7 +656,8 @@ String _driverName(WidgetRef ref, String driverId) {
 String _filterLabel(_PassengerRequestFilter filter) {
   return switch (filter) {
     _PassengerRequestFilter.inProgress => 'En curso',
-    _PassengerRequestFilter.accepted => 'Aceptados',
+    _PassengerRequestFilter.accepted => 'Aceptadas',
+    _PassengerRequestFilter.cancelled => 'Canceladas',
     _PassengerRequestFilter.pending => 'Pendientes',
     _PassengerRequestFilter.finished => 'Finalizados',
   };
@@ -650,8 +666,9 @@ String _filterLabel(_PassengerRequestFilter filter) {
 String _filterTitle(_PassengerRequestFilter filter) {
   return switch (filter) {
     _PassengerRequestFilter.inProgress => 'Viajes en curso',
-    _PassengerRequestFilter.accepted => 'Viajes aceptados',
-    _PassengerRequestFilter.pending => 'Solicitudes pendientes',
+    _PassengerRequestFilter.accepted => 'Solicitudes aceptadas',
+    _PassengerRequestFilter.cancelled => 'Solicitudes canceladas',
+    _PassengerRequestFilter.pending => 'Solicitudes de cupo pendientes',
     _PassengerRequestFilter.finished => 'Historial finalizado',
   };
 }
@@ -661,10 +678,13 @@ String _emptyText(_PassengerRequestFilter filter) {
     _PassengerRequestFilter.inProgress =>
       'No tienes viajes en curso en este momento.',
     _PassengerRequestFilter.accepted =>
-      'No tienes viajes aceptados esperando inicio.',
-    _PassengerRequestFilter.pending => 'No tienes solicitudes pendientes.',
+      'No tienes solicitudes aceptadas todavía.',
+    _PassengerRequestFilter.cancelled =>
+      'No tienes solicitudes canceladas.',
+    _PassengerRequestFilter.pending =>
+      'No tienes solicitudes de cupo pendientes.',
     _PassengerRequestFilter.finished =>
-      'Aún no tienes viajes finalizados o cancelados.',
+      'Aún no tienes viajes finalizados.',
   };
 }
 
@@ -672,6 +692,7 @@ IconData _filterIcon(_PassengerRequestFilter filter) {
   return switch (filter) {
     _PassengerRequestFilter.inProgress => Icons.navigation_outlined,
     _PassengerRequestFilter.accepted => Icons.event_available_outlined,
+    _PassengerRequestFilter.cancelled => Icons.cancel_outlined,
     _PassengerRequestFilter.pending => Icons.hourglass_top,
     _PassengerRequestFilter.finished => Icons.history,
   };

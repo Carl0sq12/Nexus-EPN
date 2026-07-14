@@ -626,7 +626,7 @@ class _MiniNumberedMarker extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: const BoxDecoration(
-        color: AppColors.success,
+        color: Colors.black,
         shape: BoxShape.circle,
       ),
       child: Center(

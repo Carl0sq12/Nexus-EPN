@@ -404,7 +404,8 @@ _GroupedTrips _groupTrips(List<Trip> trips) {
     } else if (trip.status == AppStrings.statusInProgress) {
       inProgress.add(trip);
     } else if (trip.status == AppStrings.statusFull ||
-        (trip.status == AppStrings.statusActive && trip.availableSeats == 0)) {
+        trip.availableSeats <= 0) {
+      // Cupo completo → Listos (aunque el status aún diga active).
       readyToStart.add(trip);
     } else {
       published.add(trip);

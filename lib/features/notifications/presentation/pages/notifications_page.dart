@@ -9,7 +9,6 @@ import '../../../../core/constants/app_text_styles.dart';
 import '../../../../core/providers/appwrite_provider.dart';
 import '../../../../core/widgets/app_snackbar.dart';
 import '../../../../core/widgets/app_state_views.dart';
-import '../../../profile/presentation/providers/profile_provider.dart';
 import '../../../ratings/presentation/providers/rating_provider.dart';
 import '../../../ratings/presentation/widgets/rating_dialog.dart';
 import '../../../requests/presentation/providers/request_provider.dart';
@@ -19,15 +18,6 @@ import '../providers/notification_provider.dart';
 
 class NotificationsPage extends ConsumerWidget {
   const NotificationsPage({super.key});
-
-  static const _requestTypes = {
-    'trip_request',
-    'request_accepted',
-    'request_rejected',
-    'price_proposed',
-    'price_accepted',
-    'request_cancelled',
-  };
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -169,6 +159,11 @@ class NotificationsPage extends ConsumerWidget {
     ref.invalidate(notificationsProvider(userId));
     if (!context.mounted) return;
 
+    // Seat requests live under Solicitudes, not Notificaciones.
+    if (isSeatRequestNotification(n.type)) {
+      context.go(AppStrings.routeRequests);
+      return;
+    }
     if (n.type == 'chat' && n.relatedId != null) {
       context.push('/chat/${n.relatedId}');
       return;
@@ -202,16 +197,6 @@ class NotificationsPage extends ConsumerWidget {
     }
     if (n.type == 'sos') {
       context.push(AppStrings.routeMap);
-      return;
-    }
-    if (_requestTypes.contains(n.type) && n.relatedId != null) {
-      final requestId = await _resolveRequestId(ref, userId, n);
-      if (!context.mounted) return;
-      if (requestId != null) {
-        context.push('${AppStrings.routeRequests}/$requestId');
-        return;
-      }
-      context.push('${AppStrings.routeTrips}/${n.relatedId}');
       return;
     }
   }
@@ -280,7 +265,12 @@ class NotificationsPage extends ConsumerWidget {
         return;
       }
 
-      if (trip.status != AppStrings.statusCompleted) {
+      // Allow rating when trip finished or passenger already reached their stop
+      // (in_progress) after a "viaje finalizado" notification.
+      final canRate =
+          trip.status == AppStrings.statusCompleted ||
+          trip.status == AppStrings.statusInProgress;
+      if (!canRate) {
         context.push('${AppStrings.routeTrips}/$tripId');
         return;
       }
@@ -321,47 +311,6 @@ class NotificationsPage extends ConsumerWidget {
         type: AppSnackBarType.error,
       );
       context.go(AppStrings.routeHome);
-    }
-  }
-
-  Future<String?> _resolveRequestId(
-    WidgetRef ref,
-    String userId,
-    AppNotification n,
-  ) async {
-    final tripId = n.relatedId;
-    if (tripId == null) return null;
-
-    final profile = ref.read(profileProvider(userId)).asData?.value;
-    final isDriver = profile?.role == AppStrings.roleDriver;
-
-    try {
-      if (isDriver) {
-        final requests = await ref
-            .read(requestRepositoryProvider)
-            .getRequestsForTrip(tripId);
-        if (requests.isEmpty) return null;
-        // Prefer pending/proposed; otherwise most recent.
-        final actionable = requests.where(
-          (r) =>
-              r.status == AppStrings.statusPending ||
-              r.status == AppStrings.statusPriceProposed,
-        );
-        if (actionable.isNotEmpty) return actionable.first.id;
-        final sorted = [...requests]
-          ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-        return sorted.first.id;
-      }
-
-      final mine = await ref
-          .read(requestRepositoryProvider)
-          .getMyRequests(userId);
-      final match = mine.where((r) => r.tripId == tripId).toList();
-      if (match.isEmpty) return null;
-      match.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-      return match.first.id;
-    } catch (_) {
-      return null;
     }
   }
 }

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -50,11 +51,18 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
 
   // --- Arrival / location-permission tracking ---
   final Set<String> _notifiedStopKeys = {};
+  final Set<String> _approachingStopBannerKeys = {};
   bool _notifiedApproachingDestination = false;
   bool _notifiedArrivedDestination = false;
   bool _locationPromptShown = false;
+  String? _arrivalBannerTitle;
   String? _arrivalBannerMessage;
+  Timer? _bannerDismissTimer;
   bool _passengerTerminalHandled = false;
+  bool _autoFinishStarted = false;
+  final Set<String> _passengerStopCompletedKeys = {};
+  bool _ensuredInProgress = false;
+  bool _passengerStopRated = false;
 
   @override
   void initState() {
@@ -70,8 +78,36 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _bannerDismissTimer?.cancel();
     _animatedMapController.dispose();
     super.dispose();
+  }
+
+  void _showTripLiveBanner({
+    required String title,
+    required String message,
+  }) {
+    _bannerDismissTimer?.cancel();
+    if (!mounted) return;
+    setState(() {
+      _arrivalBannerTitle = title;
+      _arrivalBannerMessage = message;
+    });
+    _bannerDismissTimer = Timer(const Duration(seconds: 12), () {
+      if (!mounted) return;
+      setState(() {
+        _arrivalBannerTitle = null;
+        _arrivalBannerMessage = null;
+      });
+    });
+  }
+
+  void _dismissTripLiveBanner() {
+    _bannerDismissTimer?.cancel();
+    setState(() {
+      _arrivalBannerTitle = null;
+      _arrivalBannerMessage = null;
+    });
   }
 
   @override
@@ -112,6 +148,11 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
   Future<void> _checkArrivals(UserLocation location) async {
     final trip = ref.read(tripByIdProvider(widget.tripId)).asData?.value;
     if (trip == null) return;
+    if (trip.status == AppStrings.statusCompleted ||
+        trip.status == AppStrings.statusCancelled) {
+      return;
+    }
+
     final driverLat = location.latitude;
     final driverLng = location.longitude;
 
@@ -120,7 +161,7 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
     );
     final ds = ref.read(notificationRemoteDatasourceProvider);
 
-    // Paradas de pasajeros aceptados.
+    // Paradas de pasajeros aceptados → viaje completado para ese pasajero.
     for (final request in accepted) {
       for (var i = 0; i < request.stops.length; i++) {
         final stop = request.stops[i];
@@ -137,18 +178,20 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
           try {
             await ds.create(
               userId: request.passengerId,
-              title: 'Tu conductor llegó',
+              title: 'Viaje finalizado',
               body:
-                  'El conductor está en tu punto de recogida. Prepárate para abordar.',
-              type: 'trip',
+                  'Llegaste a tu parada. Califica al conductor.',
+              type: 'trip_completed',
               relatedId: trip.id,
             );
             ref.invalidate(notificationsProvider(request.passengerId));
+            ref.invalidate(pendingDriverRatingsProvider(request.passengerId));
           } catch (_) {}
           if (mounted) {
-            setState(() {
-              _arrivalBannerMessage = 'Llegaste a la parada de un pasajero';
-            });
+            _showTripLiveBanner(
+              title: 'Parada de pasajero',
+              message: 'Llegaste a la parada de un pasajero.',
+            );
           }
         }
       }
@@ -167,11 +210,10 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
 
     if (!_notifiedApproachingDestination && distanceToDestination <= 500) {
       _notifiedApproachingDestination = true;
-      if (mounted) {
-        setState(() {
-          _arrivalBannerMessage = 'Estás por llegar a tu destino';
-        });
-      }
+      _showTripLiveBanner(
+        title: 'Ya casi llegan',
+        message: 'Estás por llegar a ${trip.destination}.',
+      );
       for (final request in accepted) {
         try {
           await ds.create(
@@ -186,25 +228,197 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
       }
     }
 
+    if (distanceToDestination <= 150) {
+      if (!_notifiedArrivedDestination) {
+        _notifiedArrivedDestination = true;
+        _showTripLiveBanner(
+          title: 'Destino alcanzado',
+          message: 'Llegaste al destino del viaje.',
+        );
+      }
+      await _autoFinishTripAtDestination(trip);
+    }
+  }
+
+  /// Passenger-side live alerts on the trip map (not only Notificaciones).
+  void _checkPassengerLiveAlerts({
+    required UserLocation driverLocation,
+    required Trip trip,
+    required TripRequest passengerRequest,
+  }) {
+    if (trip.status == AppStrings.statusCompleted ||
+        trip.status == AppStrings.statusCancelled) {
+      return;
+    }
+
+    // Approaching / arrived at own stop.
+    for (var i = 0; i < passengerRequest.stops.length; i++) {
+      final stop = passengerRequest.stops[i];
+      final key = '${passengerRequest.id}_$i';
+      final distance = Geolocator.distanceBetween(
+        driverLocation.latitude,
+        driverLocation.longitude,
+        stop.latitude,
+        stop.longitude,
+      );
+
+      if (!_approachingStopBannerKeys.contains(key) &&
+          distance <= 250 &&
+          distance > 60) {
+        _approachingStopBannerKeys.add(key);
+        _showTripLiveBanner(
+          title: 'Ya casi llegas',
+          message: 'El conductor se acerca a tu parada.',
+        );
+      }
+    }
+
+    final destLat = trip.destinationLatitude;
+    final destLng = trip.destinationLongitude;
+    if (destLat == null || destLng == null) return;
+
+    final distanceToDestination = Geolocator.distanceBetween(
+      driverLocation.latitude,
+      driverLocation.longitude,
+      destLat,
+      destLng,
+    );
+
+    if (!_notifiedApproachingDestination && distanceToDestination <= 500) {
+      _notifiedApproachingDestination = true;
+      _showTripLiveBanner(
+        title: 'Ya casi llegan',
+        message: 'El conductor está por llegar a ${trip.destination}.',
+      );
+    }
+
     if (!_notifiedArrivedDestination && distanceToDestination <= 150) {
       _notifiedArrivedDestination = true;
-      if (mounted) {
-        setState(() {
-          _arrivalBannerMessage = 'Llegaste al destino del viaje';
-        });
-      }
-      for (final request in accepted) {
-        try {
-          await ds.create(
-            userId: request.passengerId,
-            title: 'Llegaron al destino',
-            body: 'El viaje llegó a ${trip.destination}.',
-            type: 'trip',
-            relatedId: trip.id,
+      _showTripLiveBanner(
+        title: 'Llegaron al destino',
+        message: 'El viaje llegó a ${trip.destination}.',
+      );
+    }
+  }
+
+  Future<void> _autoFinishTripAtDestination(Trip trip) async {
+    if (_autoFinishStarted) return;
+    if (trip.status == AppStrings.statusCompleted ||
+        trip.status == AppStrings.statusCancelled) {
+      return;
+    }
+    _autoFinishStarted = true;
+
+    final ok = await completeTripWithCleanup(
+      ref,
+      trip: trip,
+      driverId: trip.driverId,
+    );
+    if (!mounted) return;
+    if (!ok) {
+      _autoFinishStarted = false;
+      showAppSnackBar(
+        context,
+        title: 'No se completó el viaje',
+        message:
+            ref.read(tripNotifierProvider).error?.toString() ??
+            'No se pudo finalizar automáticamente.',
+        type: AppSnackBarType.error,
+      );
+      return;
+    }
+
+    showAppSnackBar(
+      context,
+      title: 'Viaje completado',
+      message: 'Llegaste al destino. El viaje se finalizó automáticamente.',
+      type: AppSnackBarType.success,
+    );
+    context.go('${AppStrings.routeTrips}/${trip.id}/report');
+  }
+
+  Future<void> _ensureTripInProgress(Trip trip) async {
+    if (_ensuredInProgress) return;
+    if (trip.status == AppStrings.statusInProgress) {
+      _ensuredInProgress = true;
+      return;
+    }
+    if (trip.status == AppStrings.statusCompleted ||
+        trip.status == AppStrings.statusCancelled) {
+      return;
+    }
+    _ensuredInProgress = true;
+    await ref.read(tripNotifierProvider.notifier).updateTrip(
+      trip.id,
+      trip.driverId,
+      {'status': AppStrings.statusInProgress},
+    );
+    ref.invalidate(tripByIdProvider(trip.id));
+    ref.invalidate(myTripsProvider(trip.driverId));
+  }
+
+  Future<void> _checkPassengerOwnStopArrival({
+    required UserLocation driverLocation,
+    required Trip trip,
+    required TripRequest passengerRequest,
+    required String userId,
+  }) async {
+    if (_passengerStopRated || _passengerTerminalHandled) return;
+    if (trip.status == AppStrings.statusCancelled) return;
+
+    for (var i = 0; i < passengerRequest.stops.length; i++) {
+      final stop = passengerRequest.stops[i];
+      final key = '${passengerRequest.id}_$i';
+      if (_passengerStopCompletedKeys.contains(key)) continue;
+      final distance = Geolocator.distanceBetween(
+        driverLocation.latitude,
+        driverLocation.longitude,
+        stop.latitude,
+        stop.longitude,
+      );
+      if (distance > 60) continue;
+
+      _passengerStopCompletedKeys.add(key);
+      _passengerStopRated = true;
+      if (!mounted) return;
+
+      _showTripLiveBanner(
+        title: 'Viaje finalizado',
+        message: 'Llegaste a tu parada. Califica al conductor.',
+      );
+
+      final result = await RatingDialog.show(context);
+      if (result != null && mounted) {
+        await ref
+            .read(ratingNotifierProvider.notifier)
+            .sendRating(
+              tripId: trip.id,
+              raterId: userId,
+              ratedUserId: trip.driverId,
+              score: result.score,
+              comment: result.comment,
+            );
+        ref.invalidate(pendingDriverRatingsProvider(userId));
+        if (mounted) {
+          final state = ref.read(ratingNotifierProvider);
+          showAppSnackBar(
+            context,
+            title: state.hasError ? 'No se envió' : 'Gracias',
+            message: state.hasError
+                ? state.error.toString()
+                : 'Calificación enviada.',
+            type: state.hasError
+                ? AppSnackBarType.error
+                : AppSnackBarType.success,
           );
-          ref.invalidate(notificationsProvider(request.passengerId));
-        } catch (_) {}
+        }
       }
+      if (!mounted) return;
+      // Stay on map if trip continues for others; leave when fully done.
+      if (trip.status == AppStrings.statusCompleted) {
+        context.go(AppStrings.routeHome);
+      }
+      return;
     }
   }
 
@@ -289,6 +503,10 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
     if (trip.status == AppStrings.statusCompleted) {
       _passengerTerminalHandled = true;
       if (!mounted) return;
+      if (_passengerStopRated) {
+        context.go(AppStrings.routeHome);
+        return;
+      }
       showAppSnackBar(
         context,
         title: 'Viaje finalizado',
@@ -413,6 +631,12 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
                   ? null
                   : _acceptedPassengerRequest(acceptedRequests, userId);
 
+              if (isDriver) {
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  _ensureTripInProgress(trip);
+                });
+              }
+
               if (!isDriver && userId != null) {
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   _handlePassengerTripTerminal(trip, userId);
@@ -462,7 +686,21 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
                   next,
                 ) {
                   final remoteLocation = next.asData?.value?.toUserLocation();
-                  if (remoteLocation == null || !_autoFollowDriver) return;
+                  if (remoteLocation == null) return;
+                  if (passengerRequest != null && userId != null) {
+                    _checkPassengerLiveAlerts(
+                      driverLocation: remoteLocation,
+                      trip: trip,
+                      passengerRequest: passengerRequest,
+                    );
+                    _checkPassengerOwnStopArrival(
+                      driverLocation: remoteLocation,
+                      trip: trip,
+                      passengerRequest: passengerRequest,
+                      userId: userId,
+                    );
+                  }
+                  if (!_autoFollowDriver) return;
                   final prevRemote = previous?.asData?.value?.toUserLocation();
                   final driverPoint = LatLng(
                     remoteLocation.latitude,
@@ -536,6 +774,10 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
                   ? acceptedRequests.expand((request) => request.stops).toList()
                   : passengerRequest!.stops;
               final routePoints = routeAsync.asData?.value.points;
+              final remainingRoutePoints = _remainingRoutePoints(
+                driverPoint: driverPoint,
+                routePoints: routePoints,
+              );
               final baseDistanceMeters =
                   routeAsync.asData?.value.distanceMeters ??
                   trip.routeDistanceMeters;
@@ -558,7 +800,7 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
                     driverPoint: driverPoint,
                     driverHeading: driverHeading,
                     courseUp: _autoFollowDriver,
-                    routePoints: routePoints,
+                    routePoints: remainingRoutePoints ?? routePoints,
                     passengerStops: passengerStops,
                     onUserGesture: () {
                       // El usuario movió el mapa manualmente: deja de seguir
@@ -579,11 +821,11 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
                     Positioned(
                       top: 16,
                       left: 16,
-                      right: 76,
+                      right: isDriver ? 76 : 16,
                       child: _ArrivalBanner(
+                        title: _arrivalBannerTitle ?? 'Aviso del viaje',
                         message: _arrivalBannerMessage!,
-                        onDismiss: () =>
-                            setState(() => _arrivalBannerMessage = null),
+                        onDismiss: _dismissTripLiveBanner,
                       ),
                     ),
                   Positioned(
@@ -660,37 +902,63 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
 }
 
 class _ArrivalBanner extends StatelessWidget {
+  final String title;
   final String message;
   final VoidCallback onDismiss;
 
-  const _ArrivalBanner({required this.message, required this.onDismiss});
+  const _ArrivalBanner({
+    required this.title,
+    required this.message,
+    required this.onDismiss,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: AppColors.success,
-      borderRadius: BorderRadius.circular(14),
-      elevation: 4,
+      color: Colors.black,
+      borderRadius: BorderRadius.circular(16),
+      elevation: 6,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        padding: const EdgeInsets.fromLTRB(14, 12, 8, 12),
         child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Icon(Icons.check_circle, color: Colors.white, size: 20),
-            const SizedBox(width: 8),
+            const Padding(
+              padding: EdgeInsets.only(top: 2),
+              child: Icon(
+                Icons.notifications_active,
+                color: Colors.white,
+                size: 22,
+              ),
+            ),
+            const SizedBox(width: 10),
             Expanded(
-              child: Text(
-                message,
-                style: AppTextStyles.bodySmall.copyWith(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w600,
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    title,
+                    style: AppTextStyles.labelMedium.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    message,
+                    style: AppTextStyles.bodySmall.copyWith(
+                      color: Colors.white.withValues(alpha: 0.95),
+                    ),
+                  ),
+                ],
               ),
             ),
             IconButton(
               icon: const Icon(Icons.close, color: Colors.white, size: 18),
               onPressed: onDismiss,
               padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(),
+              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
             ),
           ],
         ),
@@ -791,7 +1059,7 @@ class _NavigationMap extends StatelessWidget {
                 height: 48,
                 child: const _MapMarker(
                   icon: Icons.person_pin_circle,
-                  color: AppColors.warning,
+                  color: Colors.black,
                 ),
               ),
           ],
@@ -1169,6 +1437,44 @@ _NavigationMetrics _remainingRouteMetrics({
     distanceMeters: remainingMeters.toDouble(),
     durationSeconds: remainingDurationSeconds,
   );
+}
+
+/// Maps-style remaining polyline: drops the already-traveled portion.
+List<LatLng>? _remainingRoutePoints({
+  required LatLng? driverPoint,
+  required List<LatLng>? routePoints,
+}) {
+  if (driverPoint == null || routePoints == null || routePoints.length < 2) {
+    return routePoints;
+  }
+
+  var bestIndex = 0;
+  var bestDistance = double.infinity;
+  LatLng bestProjected = routePoints.first;
+
+  for (var i = 0; i < routePoints.length - 1; i++) {
+    final start = routePoints[i];
+    final end = routePoints[i + 1];
+    final projected = _projectPointToSegment(driverPoint, start, end);
+    final distance = _distanceBetween(driverPoint, projected);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestIndex = i;
+      bestProjected = projected;
+    }
+  }
+
+  // Ignore huge GPS jumps off-route; keep full path until back near it.
+  if (bestDistance > 120) return routePoints;
+
+  final remaining = <LatLng>[bestProjected];
+  for (var i = bestIndex + 1; i < routePoints.length; i++) {
+    remaining.add(routePoints[i]);
+  }
+  if (remaining.length < 2) {
+    remaining.add(routePoints.last);
+  }
+  return remaining;
 }
 
 _RouteProjection? _nearestRouteProjection(

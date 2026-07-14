@@ -26,13 +26,25 @@ final availableTripsProvider = FutureProvider<List<Trip>>((ref) {
   return useCase(const NoParams());
 });
 
-/// Fetches trips created by a specific driver.
-final myTripsProvider = FutureProvider.family<List<Trip>, String>((
+/// Fetches trips created by a specific driver (live polling).
+final myTripsProvider = StreamProvider.family<List<Trip>, String>((
   ref,
   driverId,
-) {
+) async* {
   final useCase = GetMyTripsUseCase(ref.watch(tripRepositoryProvider));
-  return useCase(GetMyTripsParams(driverId: driverId));
+  List<Trip>? lastGood;
+  while (true) {
+    try {
+      lastGood = await useCase(GetMyTripsParams(driverId: driverId));
+      yield lastGood;
+    } catch (e, st) {
+      if (lastGood == null) {
+        Error.throwWithStackTrace(e, st);
+      }
+      yield lastGood;
+    }
+    await Future<void>.delayed(const Duration(seconds: 3));
+  }
 });
 
 /// Fetches a trip by id, including completed/full trips that are not available.

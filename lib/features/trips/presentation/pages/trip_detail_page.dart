@@ -1043,7 +1043,7 @@ class _TripRouteMap extends ConsumerWidget {
                           height: 44,
                           child: const _RouteMarker(
                             icon: Icons.person_pin_circle,
-                            color: AppColors.success,
+                            color: Colors.black,
                           ),
                         ),
                     ],

@@ -11,12 +11,27 @@ final notificationRemoteDatasourceProvider =
   );
 });
 
+/// Seat/cupo request events belong in Solicitudes, not in Notificaciones.
+const seatRequestNotificationTypes = {
+  'trip_request',
+  'request_accepted',
+  'request_rejected',
+  'price_proposed',
+  'price_accepted',
+  'request_cancelled',
+};
+
+bool isSeatRequestNotification(String type) =>
+    seatRequestNotificationTypes.contains(type);
+
 final notificationsProvider =
     StreamProvider.family<List<AppNotification>, String>((ref, userId) async* {
   final ds = ref.watch(notificationRemoteDatasourceProvider);
   while (true) {
     try {
-      yield await ds.listForUser(userId);
+      final all = await ds.listForUser(userId);
+      // Chat, trip finished/cancelled, SOS, etc. — never seat requests.
+      yield all.where((n) => !isSeatRequestNotification(n.type)).toList();
     } catch (_) {}
     await Future<void>.delayed(const Duration(seconds: 4));
   }
