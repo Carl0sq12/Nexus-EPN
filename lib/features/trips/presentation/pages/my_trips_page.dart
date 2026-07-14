@@ -14,6 +14,7 @@ import '../../../../core/widgets/custom_button.dart';
 import '../../../../core/widgets/loading_widget.dart';
 import '../../domain/entities/trip.dart';
 import '../providers/trip_provider.dart';
+import '../utils/trip_completion.dart';
 
 /// Driver page for managing published trips.
 class MyTripsPage extends ConsumerStatefulWidget {
@@ -294,16 +295,21 @@ class _MyTripsPageState extends ConsumerState<MyTripsPage> {
 
     if (confirmed != true) return;
 
-    await ref
-        .read(tripNotifierProvider.notifier)
-        .deleteTrip(trip.id, trip.driverId);
+    final ok = await cancelTripWithCleanup(
+      ref,
+      trip: trip,
+      driverId: trip.driverId,
+    );
 
     if (context.mounted) {
       showAppSnackBar(
         context,
-        title: 'Viaje cancelado',
-        message: 'El viaje fue retirado y ya no recibirá solicitudes.',
-        type: AppSnackBarType.info,
+        title: ok ? 'Viaje cancelado' : 'No se canceló el viaje',
+        message: ok
+            ? 'Se avisó a los pasajeros para que busquen otro viaje.'
+            : (ref.read(tripNotifierProvider).error?.toString() ??
+                  'No se pudo cancelar.'),
+        type: ok ? AppSnackBarType.info : AppSnackBarType.error,
       );
     }
   }

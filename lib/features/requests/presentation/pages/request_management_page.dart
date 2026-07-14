@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../../../core/constants/app_colors.dart';
+import '../../../../core/constants/map_tiles.dart';
 import '../../../../core/constants/app_strings.dart';
 import '../../../../core/constants/app_text_styles.dart';
 import '../../../../core/widgets/app_state_views.dart';
@@ -546,8 +547,9 @@ class _RequestStopsMap extends ConsumerWidget {
               options: MapOptions(initialCenter: origin, initialZoom: 13),
               children: [
                 TileLayer(
-                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                  userAgentPackageName: 'com.nexuscampus.app',
+                  urlTemplate: MapTiles.urlTemplate,
+                    subdomains: MapTiles.subdomains,
+                    userAgentPackageName: MapTiles.userAgentPackageName,
                 ),
                 PolylineLayer(
                   polylines: [

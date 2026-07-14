@@ -194,9 +194,9 @@ class _DeviceBlockerContent {
 _DeviceBlockerContent _contentFor(DeviceReadinessIssue issue) {
   return switch (issue) {
     DeviceReadinessIssue.noInternet => const _DeviceBlockerContent(
-      title: 'Sin conexión a internet',
+      title: 'Sin conexi?n a internet',
       message:
-          'Activa Wi-Fi o datos móviles y desactiva el modo avión. Nexus Campus necesita conexión para viajes, solicitudes, mensajes y SOS.',
+          'Activa Wi?Fi o datos m?viles y desactiva el modo avi?n. Nexus Campus necesita conexi?n para viajes, solicitudes, mensajes y SOS.',
       icon: Icons.signal_wifi_connected_no_internet_4_outlined,
       color: AppColors.warning,
       actionLabel: 'Ajustes',
@@ -206,7 +206,7 @@ _DeviceBlockerContent _contentFor(DeviceReadinessIssue issue) {
     DeviceReadinessIssue.locationServiceDisabled => _DeviceBlockerContent(
       title: 'GPS desactivado',
       message:
-          'Activa la ubicación del dispositivo. Sin GPS no se puede crear viajes, navegar, marcar paradas ni enviar SOS con ubicación.',
+          'Activa la ubicaci?n del dispositivo. Sin GPS no se puede crear viajes, navegar, marcar paradas ni enviar SOS con ubicaci?n.',
       icon: Icons.location_disabled_outlined,
       color: AppColors.error,
       actionLabel: 'Activar GPS',
@@ -214,9 +214,9 @@ _DeviceBlockerContent _contentFor(DeviceReadinessIssue issue) {
       action: Geolocator.openLocationSettings,
     ),
     DeviceReadinessIssue.locationPermissionDenied => _DeviceBlockerContent(
-      title: 'Permiso de ubicación requerido',
+      title: 'Permiso de ubicaci?n requerido',
       message:
-          'Permite el acceso a ubicación para que la app pueda calcular rutas, navegación y auxilio.',
+          'Permite el acceso a ubicaci?n para que la app pueda calcular rutas, navegaci?n y auxilio.',
       icon: Icons.location_off_outlined,
       color: AppColors.error,
       actionLabel: 'Permitir',
@@ -226,9 +226,9 @@ _DeviceBlockerContent _contentFor(DeviceReadinessIssue issue) {
       },
     ),
     DeviceReadinessIssue.locationPermissionDeniedForever => _DeviceBlockerContent(
-      title: 'Ubicación bloqueada',
+      title: 'Ubicaci?n bloqueada',
       message:
-          'La ubicación está bloqueada para Nexus Campus. Actívala desde los ajustes de la app para continuar.',
+          'La ubicaci?n est? bloqueada para Nexus Campus. Act?vala desde los ajustes de la app para continuar.',
       icon: Icons.app_blocking_outlined,
       color: AppColors.error,
       actionLabel: 'Abrir ajustes',

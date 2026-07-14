@@ -9,6 +9,7 @@ import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../../../core/constants/app_colors.dart';
+import '../../../../core/constants/map_tiles.dart';
 import '../../../../core/constants/app_strings.dart';
 import '../../../../core/constants/app_text_styles.dart';
 import '../../../../core/providers/appwrite_provider.dart';
@@ -53,12 +54,13 @@ class _HomePageState extends ConsumerState<HomePage>
     if (state != AppLifecycleState.resumed) return;
     _locationPromptShown = false;
     ref.invalidate(currentLocationProvider);
+    ref.invalidate(currentLocationStreamProvider);
   }
 
   @override
   Widget build(BuildContext context) {
     final userId = ref.watch(currentUserIdProvider);
-    final locationAsync = ref.watch(currentLocationProvider);
+    final locationAsync = ref.watch(currentLocationStreamProvider);
     final tripsAsync = ref.watch(availableTripsProvider);
     final profileAsync =
         userId == null ? null : ref.watch(profileProvider(userId));
@@ -76,7 +78,7 @@ class _HomePageState extends ConsumerState<HomePage>
     final myTripsAsync =
         isDriver && userId != null ? ref.watch(myTripsProvider(userId)) : null;
 
-    ref.listen(currentLocationProvider, (previous, next) {
+    ref.listen(currentLocationStreamProvider, (previous, next) {
       if (next.hasValue) {
         _locationPromptShown = false;
         return;
@@ -94,6 +96,7 @@ class _HomePageState extends ConsumerState<HomePage>
       body: RefreshIndicator(
         onRefresh: () async {
           ref.invalidate(currentLocationProvider);
+          ref.invalidate(currentLocationStreamProvider);
           ref.invalidate(availableTripsProvider);
           if (userId != null) {
             ref.invalidate(myRequestsProvider(userId));
@@ -124,6 +127,7 @@ class _HomePageState extends ConsumerState<HomePage>
                     onRetryLocation: () {
                       _locationPromptShown = false;
                       ref.invalidate(currentLocationProvider);
+                      ref.invalidate(currentLocationStreamProvider);
                     },
                   ),
                   const SizedBox(height: 16),
@@ -194,6 +198,7 @@ class _HomePageState extends ConsumerState<HomePage>
       await Geolocator.openAppSettings();
     }
     ref.invalidate(currentLocationProvider);
+    ref.invalidate(currentLocationStreamProvider);
   }
 }
 
@@ -636,6 +641,7 @@ class _DashboardSection extends StatelessWidget {
             icon: Icons.directions_car_outlined,
             label: 'Disponibles',
             value: availableTrips,
+            onTap: () => context.push(AppStrings.routeTrips),
           ),
         ),
         const SizedBox(width: 10),
@@ -663,16 +669,18 @@ class _MetricTile extends StatelessWidget {
   final IconData icon;
   final String label;
   final String value;
+  final VoidCallback? onTap;
 
   const _MetricTile({
     required this.icon,
     required this.label,
     required this.value,
+    this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    final content = Container(
       height: 100,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -682,20 +690,19 @@ class _MetricTile extends StatelessWidget {
           BoxShadow(
             color: Color.fromRGBO(13, 111, 148, 0.08),
             blurRadius: 12,
-            offset: Offset(0, 4),
+            offset: Offset(0, 2),
           ),
         ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, color: AppColors.primary, size: 20),
+          Icon(icon, color: AppColors.primary, size: 22),
           const Spacer(),
           Text(
             value,
             style: AppTextStyles.titleMedium.copyWith(
-              color: AppColors.onBackground,
-              fontWeight: FontWeight.bold,
+              fontWeight: FontWeight.w700,
             ),
           ),
           const SizedBox(height: 2),
@@ -703,11 +710,22 @@ class _MetricTile extends StatelessWidget {
             label,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: AppTextStyles.bodySmall.copyWith(
+            style: AppTextStyles.labelSmall.copyWith(
               color: AppColors.textSecondary,
             ),
           ),
         ],
+      ),
+    );
+
+    if (onTap == null) return content;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: onTap,
+        child: content,
       ),
     );
   }
@@ -728,8 +746,7 @@ class _MapSection extends StatefulWidget {
 
 class _MapSectionState extends State<_MapSection> {
   final MapController _mapController = MapController();
-
-  static const _epnLocation = LatLng(-0.2106, -78.4889);
+  LatLng? _lastCentered;
 
   void _centerOnMe() {
     final location = widget.locationAsync.asData?.value;
@@ -737,7 +754,31 @@ class _MapSectionState extends State<_MapSection> {
       widget.onRetryLocation();
       return;
     }
-    _mapController.move(LatLng(location.latitude, location.longitude), 16);
+    final point = LatLng(location.latitude, location.longitude);
+    _lastCentered = point;
+    _mapController.move(point, 16);
+  }
+
+  @override
+  void didUpdateWidget(covariant _MapSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final location = widget.locationAsync.asData?.value;
+    if (location == null) return;
+    final point = LatLng(location.latitude, location.longitude);
+    if (_lastCentered != null &&
+        (_lastCentered!.latitude - point.latitude).abs() < 0.00001 &&
+        (_lastCentered!.longitude - point.longitude).abs() < 0.00001) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      try {
+        _mapController.move(point, _mapController.camera.zoom);
+        _lastCentered = point;
+      } catch (_) {
+        // Map may not be ready yet.
+      }
+    });
   }
 
   @override
@@ -787,17 +828,17 @@ class _MapSectionState extends State<_MapSection> {
                     icon: Icons.my_location,
                     label: AppStrings.loadingLocation,
                   ),
-                  error: (_, _) => _MapPreview(
-                    mapController: _mapController,
-                    center: _epnLocation,
-                    icon: Icons.school_outlined,
-                    label: 'EPN',
-                    helperText:
-                        'Activa la ubicación para ver tu posición actual. Toca para reintentar.',
-                    onTap: widget.onRetryLocation,
+                  error: (_, _) => _MapPlaceholder(
+                    icon: Icons.location_off_outlined,
+                    label: 'No se pudo obtener tu ubicación',
+                    actionLabel: 'Reintentar',
+                    onAction: widget.onRetryLocation,
                   ),
                   data: (location) {
-                    final center = LatLng(location.latitude, location.longitude);
+                    final center = LatLng(
+                      location.latitude,
+                      location.longitude,
+                    );
                     return _MapPreview(
                       mapController: _mapController,
                       center: center,
@@ -833,16 +874,12 @@ class _MapPreview extends StatelessWidget {
   final LatLng center;
   final IconData icon;
   final String label;
-  final String? helperText;
-  final VoidCallback? onTap;
 
   const _MapPreview({
     required this.mapController,
     required this.center,
     required this.icon,
     required this.label,
-    this.helperText,
-    this.onTap,
   });
 
   @override
@@ -860,8 +897,9 @@ class _MapPreview extends StatelessWidget {
           ),
           children: [
             TileLayer(
-              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-              userAgentPackageName: 'com.epn.nexus_campus',
+              urlTemplate: MapTiles.urlTemplate,
+              subdomains: MapTiles.subdomains,
+              userAgentPackageName: MapTiles.userAgentPackageName,
             ),
             MarkerLayer(
               markers: [
@@ -881,34 +919,6 @@ class _MapPreview extends StatelessWidget {
             ),
           ],
         ),
-        if (helperText != null)
-          Positioned(
-            left: 12,
-            right: 12,
-            bottom: 12,
-            child: Material(
-              color: AppColors.surface.withValues(alpha: 0.94),
-              borderRadius: BorderRadius.circular(14),
-              child: InkWell(
-                borderRadius: BorderRadius.circular(12),
-                onTap: onTap,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 10,
-                  ),
-                  child: Text(
-                    helperText!,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppTextStyles.bodySmall.copyWith(
-                      color: AppColors.textSecondary,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
       ],
     );
   }
@@ -917,8 +927,15 @@ class _MapPreview extends StatelessWidget {
 class _MapPlaceholder extends StatelessWidget {
   final IconData icon;
   final String label;
+  final String? actionLabel;
+  final VoidCallback? onAction;
 
-  const _MapPlaceholder({required this.icon, required this.label});
+  const _MapPlaceholder({
+    required this.icon,
+    required this.label,
+    this.actionLabel,
+    this.onAction,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -930,12 +947,20 @@ class _MapPlaceholder extends StatelessWidget {
           children: [
             Icon(icon, color: AppColors.primary, size: 32),
             const SizedBox(height: 8),
-            Text(
-              label,
-              style: AppTextStyles.bodySmall.copyWith(
-                color: AppColors.textSecondary,
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Text(
+                label,
+                textAlign: TextAlign.center,
+                style: AppTextStyles.bodySmall.copyWith(
+                  color: AppColors.textSecondary,
+                ),
               ),
             ),
+            if (actionLabel != null && onAction != null) ...[
+              const SizedBox(height: 10),
+              TextButton(onPressed: onAction, child: Text(actionLabel!)),
+            ],
           ],
         ),
       ),
@@ -1181,10 +1206,9 @@ class _AvailableTripsSection extends StatelessWidget {
           }
 
           return Column(
-            children: trips
-                .take(4)
-                .map((trip) => _TripPreviewCard(trip: trip))
-                .toList(),
+            children: [
+              for (final trip in trips) _TripPreviewCard(trip: trip),
+            ],
           );
         },
       ),

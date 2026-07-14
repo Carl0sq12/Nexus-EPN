@@ -507,6 +507,24 @@ const COLLECTIONS = [
     ],
   },
   {
+    id: 'trip_locations',
+    name: 'Trip Locations',
+    attributes: [
+      { key: 'trip_id', type: 'string', size: 64, required: true },
+      { key: 'driver_id', type: 'string', size: 64, required: true },
+      { key: 'latitude', type: 'float', required: true },
+      { key: 'longitude', type: 'float', required: true },
+      { key: 'heading', type: 'float', required: false },
+      { key: 'speed', type: 'float', required: false },
+      { key: 'updated_at', type: 'datetime', required: true },
+    ],
+    indexes: [
+      { key: 'idx_trip_id', type: 'key', attributes: ['trip_id'] },
+      { key: 'idx_driver_id', type: 'key', attributes: ['driver_id'] },
+      { key: 'idx_updated_at', type: 'key', attributes: ['updated_at'] },
+    ],
+  },
+  {
     id: 'sos_alerts',
     name: 'SOS Alerts',
     attributes: [

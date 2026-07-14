@@ -545,7 +545,8 @@ final pendingDriverRatingsProvider =
             documentId: tripId,
           );
           final trip = normalizeDocument(tripDoc);
-          if (trip['status'] != 'completed') continue;
+          // Only completed trips can be rated; cancelled never.
+          if (trip['status'] != AppStrings.statusCompleted) continue;
 
           final driverId = trip['driver_id'] as String;
           final alreadyRated = await ratingDs.hasRating(

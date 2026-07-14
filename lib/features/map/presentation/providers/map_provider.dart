@@ -1,8 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import '../../../../core/usecase/usecase.dart';
@@ -37,43 +37,39 @@ final currentLocationProvider = FutureProvider<UserLocation>((ref) {
 
 /// Streams the device location while an in-app trip is in progress.
 ///
-/// Uses a high-frequency, high-accuracy navigation profile (similar to
-/// turn-by-turn apps): short distance filter + short update interval so the
-/// driver marker moves fluidly instead of jumping every few meters.
+/// Yields last-known immediately (when available), then a fresh fix, then the
+/// continuous GPS stream — so the UI never sticks on EPN fallbacks while
+/// waiting for the first lock.
 final currentLocationStreamProvider = StreamProvider<UserLocation>((
   ref,
 ) async* {
   final datasource = ref.watch(locationDatasourceProvider);
-  final initialPosition = await datasource.getCurrentPosition();
-  yield UserLocation(
-    latitude: initialPosition.latitude,
-    longitude: initialPosition.longitude,
-    heading: initialPosition.heading,
-    speed: initialPosition.speed,
-  );
 
-  final LocationSettings settings;
-  if (Platform.isAndroid) {
-    settings = AndroidSettings(
-      accuracy: LocationAccuracy.bestForNavigation,
-      distanceFilter: 2,
-      intervalDuration: const Duration(milliseconds: 700),
-    );
-  } else if (Platform.isIOS || Platform.isMacOS) {
-    settings = AppleSettings(
-      accuracy: LocationAccuracy.bestForNavigation,
-      activityType: ActivityType.automotiveNavigation,
-      distanceFilter: 2,
-      pauseLocationUpdatesAutomatically: false,
-    );
-  } else {
-    settings = const LocationSettings(
-      accuracy: LocationAccuracy.bestForNavigation,
-      distanceFilter: 2,
+  final lastKnown = await datasource.getLastKnownPosition();
+  if (lastKnown != null) {
+    yield UserLocation(
+      latitude: lastKnown.latitude,
+      longitude: lastKnown.longitude,
+      heading: lastKnown.heading,
+      speed: lastKnown.speed,
     );
   }
 
-  yield* Geolocator.getPositionStream(locationSettings: settings).map(
+  try {
+    final fresh = await datasource.getCurrentPosition();
+    yield UserLocation(
+      latitude: fresh.latitude,
+      longitude: fresh.longitude,
+      heading: fresh.heading,
+      speed: fresh.speed,
+    );
+  } catch (_) {
+    // Keep streaming if lastKnown already painted the map; otherwise rethrow
+    // so the UI can show a real error (not a fake campus pin).
+    if (lastKnown == null) rethrow;
+  }
+
+  yield* datasource.watchPosition().map(
     (position) => UserLocation(
       latitude: position.latitude,
       longitude: position.longitude,
@@ -100,9 +96,23 @@ final routeInfoProvider = FutureProvider.family<RouteInfo, RouteRequest>((
     '$routeCoordinates?overview=full&geometries=geojson',
   );
 
-  final response = await http.get(uri);
+  late final http.Response response;
+  try {
+    response = await http
+        .get(uri)
+        .timeout(const Duration(seconds: 20));
+  } on TimeoutException {
+    throw Exception(
+      'La ruta tardó demasiado (datos lentos). Intenta de nuevo o cambia de red.',
+    );
+  } on SocketException {
+    throw Exception(
+      'Sin conexión al servicio de rutas. Revisa tus datos móviles e inténtalo otra vez.',
+    );
+  }
+
   if (response.statusCode != 200) {
-    throw Exception('No se pudo calcular la ruta');
+    throw Exception('No se pudo calcular la ruta (${response.statusCode})');
   }
 
   final data = jsonDecode(response.body) as Map<String, dynamic>;

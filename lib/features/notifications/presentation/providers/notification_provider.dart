@@ -12,6 +12,12 @@ final notificationRemoteDatasourceProvider =
 });
 
 final notificationsProvider =
-    FutureProvider.family<List<AppNotification>, String>((ref, userId) async {
-  return ref.watch(notificationRemoteDatasourceProvider).listForUser(userId);
+    StreamProvider.family<List<AppNotification>, String>((ref, userId) async* {
+  final ds = ref.watch(notificationRemoteDatasourceProvider);
+  while (true) {
+    try {
+      yield await ds.listForUser(userId);
+    } catch (_) {}
+    await Future<void>.delayed(const Duration(seconds: 4));
+  }
 });

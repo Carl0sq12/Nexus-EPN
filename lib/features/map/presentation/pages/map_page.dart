@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import '../../../../core/constants/app_colors.dart';
+import '../../../../core/constants/map_tiles.dart';
 import '../../../../core/constants/app_text_styles.dart';
 import '../../../../core/constants/app_strings.dart';
 import '../../../trips/data/models/trip_location_model.dart';
@@ -15,8 +16,6 @@ import '../providers/map_provider.dart';
 class MapPage extends ConsumerStatefulWidget {
   const MapPage({super.key});
 
-  static const _epnLocation = LatLng(-0.2106, -78.4889);
-
   @override
   ConsumerState<MapPage> createState() => _MapPageState();
 }
@@ -24,11 +23,31 @@ class MapPage extends ConsumerStatefulWidget {
 class _MapPageState extends ConsumerState<MapPage> {
   final MapController _mapController = MapController();
   static const _nearbyCarsRadiusMeters = 5000.0;
+  LatLng? _lastFollowed;
+  bool _followUser = true;
 
   @override
   Widget build(BuildContext context) {
     final locationAsync = ref.watch(currentLocationStreamProvider);
     final nearbyCarsAsync = ref.watch(recentTripLocationsStreamProvider);
+
+    ref.listen(currentLocationStreamProvider, (previous, next) {
+      final location = next.asData?.value;
+      if (!_followUser || location == null) return;
+      final point = LatLng(location.latitude, location.longitude);
+      if (_lastFollowed != null &&
+          (_lastFollowed!.latitude - point.latitude).abs() < 0.000005 &&
+          (_lastFollowed!.longitude - point.longitude).abs() < 0.000005) {
+        return;
+      }
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        try {
+          _mapController.move(point, _mapController.camera.zoom);
+          _lastFollowed = point;
+        } catch (_) {}
+      });
+    });
 
     return Scaffold(
       appBar: AppBar(
@@ -37,6 +56,16 @@ class _MapPageState extends ConsumerState<MapPage> {
           decoration: const BoxDecoration(gradient: AppColors.primaryGradient),
         ),
         foregroundColor: Colors.white,
+        actions: [
+          IconButton(
+            tooltip: 'Actualizar ubicación',
+            icon: const Icon(Icons.refresh),
+            onPressed: () {
+              ref.invalidate(currentLocationStreamProvider);
+              ref.invalidate(currentLocationProvider);
+            },
+          ),
+        ],
       ),
       body: locationAsync.when(
         loading: () => const Center(
@@ -49,7 +78,44 @@ class _MapPageState extends ConsumerState<MapPage> {
             ],
           ),
         ),
-        error: (e, _) => const _MapFallback(),
+        error: (e, _) => Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.location_off_outlined,
+                  size: 48,
+                  color: AppColors.error,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'No se pudo obtener tu ubicación real',
+                  style: AppTextStyles.titleMedium,
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  e.toString(),
+                  style: AppTextStyles.bodySmall.copyWith(
+                    color: AppColors.textSecondary,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 16),
+                FilledButton.icon(
+                  onPressed: () {
+                    ref.invalidate(currentLocationStreamProvider);
+                    ref.invalidate(currentLocationProvider);
+                  },
+                  icon: const Icon(Icons.my_location),
+                  label: const Text('Reintentar GPS'),
+                ),
+              ],
+            ),
+          ),
+        ),
         data: (location) {
           final center = LatLng(location.latitude, location.longitude);
           final nearbyCars = _nearbyCars(
@@ -62,27 +128,18 @@ class _MapPageState extends ConsumerState<MapPage> {
             heading: _normalizedHeading(location.heading),
             nearbyCars: nearbyCars,
             mapController: _mapController,
-            title: AppStrings.mapTitle,
+            title: 'Tu ubicación',
             subtitle:
-                '${location.latitude.toStringAsFixed(4)}, ${location.longitude.toStringAsFixed(4)} · ${nearbyCars.length} auto(s) cerca',
+                '${location.latitude.toStringAsFixed(5)}, ${location.longitude.toStringAsFixed(5)} · ${nearbyCars.length} auto(s) cerca',
+            onUserGesture: () => _followUser = false,
+            onCenterMe: () {
+              _followUser = true;
+              _mapController.move(center, 16);
+              _lastFollowed = center;
+            },
           );
         },
       ),
-    );
-  }
-}
-
-class _MapFallback extends StatelessWidget {
-  const _MapFallback();
-
-  @override
-  Widget build(BuildContext context) {
-    return const _MapContent(
-      center: MapPage._epnLocation,
-      markerIcon: Icons.school_outlined,
-      heading: 0,
-      title: 'Campus EPN',
-      subtitle: 'Activa la ubicación para ver tu posición actual.',
     );
   }
 }
@@ -95,6 +152,8 @@ class _MapContent extends StatelessWidget {
   final MapController? mapController;
   final String title;
   final String subtitle;
+  final VoidCallback? onUserGesture;
+  final VoidCallback? onCenterMe;
 
   const _MapContent({
     required this.center,
@@ -104,6 +163,8 @@ class _MapContent extends StatelessWidget {
     this.mapController,
     required this.title,
     required this.subtitle,
+    this.onUserGesture,
+    this.onCenterMe,
   });
 
   @override
@@ -112,11 +173,18 @@ class _MapContent extends StatelessWidget {
       children: [
         FlutterMap(
           mapController: mapController,
-          options: MapOptions(initialCenter: center, initialZoom: 15.0),
+          options: MapOptions(
+            initialCenter: center,
+            initialZoom: 16.0,
+            onPositionChanged: (position, hasGesture) {
+              if (hasGesture) onUserGesture?.call();
+            },
+          ),
           children: [
             TileLayer(
-              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-              userAgentPackageName: 'com.nexuscampus.app',
+              urlTemplate: MapTiles.urlTemplate,
+              subdomains: MapTiles.subdomains,
+              userAgentPackageName: MapTiles.userAgentPackageName,
             ),
             MarkerLayer(
               markers: [
@@ -164,9 +232,7 @@ class _MapContent extends StatelessWidget {
           child: FloatingActionButton.small(
             heroTag: 'center_location',
             backgroundColor: AppColors.surface,
-            onPressed: mapController == null
-                ? null
-                : () => mapController!.move(center, 15),
+            onPressed: onCenterMe,
             child: const Icon(Icons.my_location, color: AppColors.primary),
           ),
         ),
@@ -192,7 +258,7 @@ class _MapContent extends StatelessWidget {
                 Container(
                   width: 40,
                   height: 40,
-                  decoration: BoxDecoration(
+                  decoration: const BoxDecoration(
                     shape: BoxShape.circle,
                     gradient: AppColors.primaryGradient,
                   ),

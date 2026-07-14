@@ -9,6 +9,7 @@ import 'package:go_router/go_router.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../../../core/constants/app_colors.dart';
+import '../../../../core/constants/map_tiles.dart';
 import '../../../../core/constants/app_strings.dart';
 import '../../../../core/constants/app_text_styles.dart';
 import '../../../../core/providers/appwrite_provider.dart';
@@ -18,6 +19,8 @@ import '../../../../core/widgets/loading_widget.dart';
 import '../../../map/domain/entities/user_location.dart';
 import '../../../map/presentation/providers/map_provider.dart';
 import '../../../notifications/presentation/providers/notification_provider.dart';
+import '../../../ratings/presentation/providers/rating_provider.dart';
+import '../../../ratings/presentation/widgets/rating_dialog.dart';
 import '../../../requests/presentation/providers/request_provider.dart';
 import '../../../requests/domain/entities/trip_request.dart';
 import '../../domain/entities/trip.dart';
@@ -51,6 +54,7 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
   bool _notifiedArrivedDestination = false;
   bool _locationPromptShown = false;
   String? _arrivalBannerMessage;
+  bool _passengerTerminalHandled = false;
 
   @override
   void initState() {
@@ -92,12 +96,16 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
     return accepted;
   }
 
-  /// Smoothly pans (and optionally zooms) the camera to [point], instead of
-  /// snapping instantly like a plain [MapController.move] would.
-  void _animateCameraTo(LatLng point, {double? zoom}) {
+  /// Smoothly pans (and optionally zooms/rotates) the camera to [point].
+  ///
+  /// Pass [heading] (degrees clockwise from north) to enable Maps-style
+  /// course-up: the map rotates so travel direction stays at the top.
+  void _animateCameraTo(LatLng point, {double? zoom, double? heading}) {
     _animatedMapController.animateTo(
       dest: point,
       zoom: zoom ?? _animatedMapController.mapController.camera.zoom,
+      // flutter_map rotation is clockwise; course-up needs the inverse.
+      rotation: heading == null ? null : -heading,
     );
   }
 
@@ -252,6 +260,72 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
     }
   }
 
+  Future<void> _handlePassengerTripTerminal(Trip trip, String userId) async {
+    if (_passengerTerminalHandled) return;
+    if (trip.status == AppStrings.statusCancelled) {
+      _passengerTerminalHandled = true;
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Viaje cancelado'),
+          content: const Text(
+            'El conductor canceló el viaje. Busca otro conductor.',
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Buscar viaje'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted) return;
+      context.go(AppStrings.routeTrips);
+      return;
+    }
+
+    if (trip.status == AppStrings.statusCompleted) {
+      _passengerTerminalHandled = true;
+      if (!mounted) return;
+      showAppSnackBar(
+        context,
+        title: 'Viaje finalizado',
+        message: 'Califica al conductor.',
+        type: AppSnackBarType.success,
+      );
+      final result = await RatingDialog.show(context);
+      if (result != null && mounted) {
+        await ref
+            .read(ratingNotifierProvider.notifier)
+            .sendRating(
+              tripId: trip.id,
+              raterId: userId,
+              ratedUserId: trip.driverId,
+              score: result.score,
+              comment: result.comment,
+            );
+        ref.invalidate(pendingDriverRatingsProvider(userId));
+        if (mounted) {
+          final state = ref.read(ratingNotifierProvider);
+          showAppSnackBar(
+            context,
+            title: state.hasError ? 'No se envió' : 'Gracias',
+            message: state.hasError
+                ? state.error.toString()
+                : 'Calificación enviada.',
+            type: state.hasError
+                ? AppSnackBarType.error
+                : AppSnackBarType.success,
+          );
+        }
+      }
+      if (!mounted) return;
+      context.go(AppStrings.routeHome);
+    }
+  }
+
   Future<void> _showLocationPrompt(String error) async {
     if (!mounted) return;
     final serviceDisabled = error.contains('Location services are disabled');
@@ -306,6 +380,14 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
     final userId = authState.value?.userId;
     final tripState = ref.watch(tripNotifierProvider);
 
+    // Passenger: detect cancel/complete even if the driver did it on another phone.
+    ref.listen(tripStatusStreamProvider(widget.tripId), (previous, next) {
+      final trip = next.asData?.value;
+      if (trip == null || userId == null) return;
+      if (userId == trip.driverId) return;
+      _handlePassengerTripTerminal(trip, userId);
+    });
+
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
@@ -321,12 +403,22 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
             loading: () => const LoadingWidget(),
             error: (e, _) => Center(child: Text(e.toString())),
             data: (trip) {
+              // Refresh snapshot while stream polls for terminal states.
+              ref.watch(tripStatusStreamProvider(trip.id));
+
               final requestsAsync = ref.watch(requestsByTripProvider(trip.id));
               final acceptedRequests = _acceptedRequestsFrom(requestsAsync);
               final isDriver = userId == trip.driverId;
               final passengerRequest = userId == null
                   ? null
                   : _acceptedPassengerRequest(acceptedRequests, userId);
+
+              if (!isDriver && userId != null) {
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  _handlePassengerTripTerminal(trip, userId);
+                });
+              }
+
               if (isDriver) {
                 ref.listen(currentLocationStreamProvider, (previous, next) {
                   if (next.hasError) {
@@ -349,9 +441,17 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
                       location.latitude,
                       location.longitude,
                     );
+                    final heading = _effectiveNavigationHeading(
+                      previous: previous?.asData?.value,
+                      current: location,
+                    );
                     WidgetsBinding.instance.addPostFrameCallback((_) {
                       if (!mounted) return;
-                      _animateCameraTo(driverPoint, zoom: 16);
+                      _animateCameraTo(
+                        driverPoint,
+                        zoom: 17,
+                        heading: heading,
+                      );
                     });
                   }
                   _checkArrivals(location);
@@ -363,13 +463,22 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
                 ) {
                   final remoteLocation = next.asData?.value?.toUserLocation();
                   if (remoteLocation == null || !_autoFollowDriver) return;
+                  final prevRemote = previous?.asData?.value?.toUserLocation();
                   final driverPoint = LatLng(
                     remoteLocation.latitude,
                     remoteLocation.longitude,
                   );
+                  final heading = _effectiveNavigationHeading(
+                    previous: prevRemote,
+                    current: remoteLocation,
+                  );
                   WidgetsBinding.instance.addPostFrameCallback((_) {
                     if (!mounted) return;
-                    _animateCameraTo(driverPoint, zoom: 16);
+                    _animateCameraTo(
+                      driverPoint,
+                      zoom: 17,
+                      heading: heading,
+                    );
                   });
                 });
               }
@@ -448,6 +557,7 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
                     destination: destination,
                     driverPoint: driverPoint,
                     driverHeading: driverHeading,
+                    courseUp: _autoFollowDriver,
                     routePoints: routePoints,
                     passengerStops: passengerStops,
                     onUserGesture: () {
@@ -455,6 +565,7 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
                       // automáticamente hasta que toque "centrar en mí".
                       if (_autoFollowDriver) {
                         setState(() => _autoFollowDriver = false);
+                        _animatedMapController.animateTo(rotation: 0);
                       }
                     },
                   ),
@@ -509,7 +620,11 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
                             isActive: _autoFollowDriver,
                             onPressed: () {
                               setState(() => _autoFollowDriver = true);
-                              _animateCameraTo(driverPoint, zoom: 16);
+                              _animateCameraTo(
+                                driverPoint,
+                                zoom: 17,
+                                heading: driverHeading,
+                              );
                             },
                           ),
                         ],
@@ -590,6 +705,7 @@ class _NavigationMap extends StatelessWidget {
   final LatLng destination;
   final LatLng? driverPoint;
   final double driverHeading;
+  final bool courseUp;
   final List<LatLng>? routePoints;
   final List<TripRequestStop> passengerStops;
   final VoidCallback onUserGesture;
@@ -600,6 +716,7 @@ class _NavigationMap extends StatelessWidget {
     required this.destination,
     required this.driverPoint,
     required this.driverHeading,
+    required this.courseUp,
     required this.routePoints,
     required this.passengerStops,
     required this.onUserGesture,
@@ -623,8 +740,9 @@ class _NavigationMap extends StatelessWidget {
       ),
       children: [
         TileLayer(
-          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-          userAgentPackageName: 'com.nexuscampus.app',
+          urlTemplate: MapTiles.urlTemplate,
+          subdomains: MapTiles.subdomains,
+          userAgentPackageName: MapTiles.userAgentPackageName,
         ),
         PolylineLayer(
           polylines: [
@@ -663,6 +781,7 @@ class _NavigationMap extends StatelessWidget {
                 child: _SmoothDriverMarker(
                   target: driverPoint!,
                   compassHeading: driverHeading,
+                  courseUp: courseUp,
                 ),
               ),
             for (final stop in passengerStops)
@@ -722,16 +841,19 @@ class _MapControlButton extends StatelessWidget {
   }
 }
 
-/// Driver marker that smoothly rotates toward the direction of real movement
-/// (computed from consecutive GPS fixes) instead of snapping instantly to the
-/// raw compass heading, which is unreliable inside a moving vehicle.
+/// Driver marker that rotates like Google Maps / Waze:
+/// - While moving: faces the GPS travel bearing (turns left/right with the car).
+/// - Nearly stopped: falls back to device compass heading.
+/// - With [courseUp] (auto-follow): arrow stays pointing up; the map rotates.
 class _SmoothDriverMarker extends StatefulWidget {
   final LatLng target;
   final double compassHeading;
+  final bool courseUp;
 
   const _SmoothDriverMarker({
     required this.target,
     required this.compassHeading,
+    this.courseUp = false,
   });
 
   @override
@@ -744,56 +866,81 @@ class _SmoothDriverMarkerState extends State<_SmoothDriverMarker>
   LatLng? _previousPoint;
   double _fromHeading = 0;
   double _toHeading = 0;
+  double _displayedHeading = 0;
 
   @override
   void initState() {
     super.initState();
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 700),
-    );
+      duration: const Duration(milliseconds: 420),
+    )..addListener(() {
+        final t = Curves.easeOutCubic.transform(_controller.value);
+        _displayedHeading = _lerpAngle(_fromHeading, _toHeading, t);
+      });
     _previousPoint = widget.target;
     _toHeading = widget.compassHeading;
     _fromHeading = widget.compassHeading;
+    _displayedHeading = widget.compassHeading;
   }
 
   @override
   void didUpdateWidget(covariant _SmoothDriverMarker oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.target == widget.target) return;
 
-    final from = _previousPoint ?? widget.target;
+    final from = _previousPoint ?? oldWidget.target;
     final distance = Geolocator.distanceBetween(
       from.latitude,
       from.longitude,
       widget.target.latitude,
       widget.target.longitude,
     );
+    final moved = distance >= 1.2;
+    final headingDelta = _shortestAngleDelta(
+      oldWidget.compassHeading,
+      widget.compassHeading,
+    ).abs();
+    final compassChanged = headingDelta >= 4;
 
-    _fromHeading = _toHeading;
-    // With real movement, orient by the actual bearing traveled (mirrors
-    // turns like Waze). At near-zero speed, fall back to the device compass.
-    _toHeading = distance > 3
-        ? Geolocator.bearingBetween(
-            from.latitude,
-            from.longitude,
-            widget.target.latitude,
-            widget.target.longitude,
-          )
-        : widget.compassHeading;
+    if (!moved && !compassChanged && oldWidget.courseUp == widget.courseUp) {
+      return;
+    }
+
+    _fromHeading = _displayedHeading;
+
+    if (moved) {
+      _toHeading = _normalizeBearing(
+        Geolocator.bearingBetween(
+          from.latitude,
+          from.longitude,
+          widget.target.latitude,
+          widget.target.longitude,
+        ),
+      );
+    } else {
+      _toHeading = _normalizeBearing(widget.compassHeading);
+    }
 
     _previousPoint = widget.target;
+    if (_shortestAngleDelta(_fromHeading, _toHeading).abs() < 0.5) {
+      _displayedHeading = _toHeading;
+      return;
+    }
     _controller
       ..reset()
       ..forward();
   }
 
   double _lerpAngle(double a, double b, double t) {
+    final diff = _shortestAngleDelta(a, b);
+    return _normalizeBearing(a + diff * t);
+  }
+
+  double _shortestAngleDelta(double a, double b) {
     var diff = (b - a) % 360;
     if (diff > 180) diff -= 360;
     if (diff < -180) diff += 360;
-    final result = (a + diff * t) % 360;
-    return result < 0 ? result + 360 : result;
+    return diff;
   }
 
   @override
@@ -807,10 +954,13 @@ class _SmoothDriverMarkerState extends State<_SmoothDriverMarker>
     return AnimatedBuilder(
       animation: _controller,
       builder: (context, _) {
-        final t = Curves.easeOut.transform(_controller.value);
+        final t = Curves.easeOutCubic.transform(_controller.value);
         final heading = _lerpAngle(_fromHeading, _toHeading, t);
+        // Course-up: map already faces travel direction — keep arrow pointing up.
+        // North-up (manual pan): rotate arrow by geographic heading.
+        final screenDegrees = widget.courseUp ? 0.0 : heading;
         return Transform.rotate(
-          angle: heading * math.pi / 180,
+          angle: screenDegrees * math.pi / 180,
           child: const _MapMarker(
             icon: Icons.navigation,
             color: AppColors.success,
@@ -1223,28 +1373,71 @@ double _normalizedHeading(double? heading) {
   return heading % 360;
 }
 
+double _normalizeBearing(double bearing) {
+  var value = bearing % 360;
+  if (value < 0) value += 360;
+  return value;
+}
+
+/// Heading for course-up navigation (Maps-style).
+/// Prefers GPS travel bearing when the vehicle moved; otherwise compass.
+double? _effectiveNavigationHeading({
+  required UserLocation? previous,
+  required UserLocation current,
+}) {
+  if (previous != null) {
+    final distance = Geolocator.distanceBetween(
+      previous.latitude,
+      previous.longitude,
+      current.latitude,
+      current.longitude,
+    );
+    if (distance >= 1.2) {
+      return _normalizeBearing(
+        Geolocator.bearingBetween(
+          previous.latitude,
+          previous.longitude,
+          current.latitude,
+          current.longitude,
+        ),
+      );
+    }
+  }
+  final heading = current.heading;
+  if (!heading.isFinite || heading < 0) return null;
+  return _normalizedHeading(heading);
+}
+
 Future<void> _finishTrip(
   BuildContext context,
   WidgetRef ref,
   Trip trip,
   String driverId,
 ) async {
-  if (!await _isNearDestination(context, ref, trip)) return;
+  final distanceHint = await _destinationDistanceHint(ref, trip);
   if (!context.mounted) return;
 
   final confirmed = await showDialog<bool>(
     context: context,
     builder: (dialogContext) => AlertDialog(
       title: const Text('Finalizar viaje'),
-      content: const Text('¿Quieres marcar este viaje como completado?'),
+      content: Text(
+        distanceHint == null
+            ? '¿Estás seguro de finalizar el viaje?\n\n'
+                  'Se marcará como completado y se cerrará el chat con los pasajeros.'
+            : '¿Estás seguro de finalizar el viaje?\n\n'
+                  'Estás a unos ${distanceHint.round()} m del destino. '
+                  'Aun así puedes finalizarlo si ya terminaste el recorrido.\n\n'
+                  'Se marcará como completado y se cerrará el chat con los pasajeros.',
+      ),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(dialogContext, false),
           child: const Text(AppStrings.cancel),
         ),
-        TextButton(
+        FilledButton(
           onPressed: () => Navigator.pop(dialogContext, true),
-          child: const Text('Finalizar'),
+          child: const Text('Sí, finalizar'),
         ),
       ],
     ),
@@ -1274,14 +1467,12 @@ Future<void> _finishTrip(
   context.go('${AppStrings.routeTrips}/${trip.id}/report');
 }
 
-Future<bool> _isNearDestination(
-  BuildContext context,
-  WidgetRef ref,
-  Trip trip,
-) async {
+/// Optional distance to destination for the confirmation message.
+/// Returns null when close (<=200 m), unknown, or location unavailable.
+Future<double?> _destinationDistanceHint(WidgetRef ref, Trip trip) async {
   final destinationLatitude = trip.destinationLatitude;
   final destinationLongitude = trip.destinationLongitude;
-  if (destinationLatitude == null || destinationLongitude == null) return false;
+  if (destinationLatitude == null || destinationLongitude == null) return null;
 
   try {
     ref.invalidate(currentLocationProvider);
@@ -1292,34 +1483,9 @@ Future<bool> _isNearDestination(
       destinationLatitude,
       destinationLongitude,
     );
-    if (distanceMeters <= 200) return true;
-    if (!context.mounted) return false;
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Aún estás lejos del destino'),
-        content: Text(
-          'Debes estar a menos de 200 m para finalizar el viaje. '
-          'Distancia actual: ${distanceMeters.round()} m.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Entendido'),
-          ),
-        ],
-      ),
-    );
-    return false;
-  } catch (e) {
-    if (context.mounted) {
-      showAppSnackBar(
-        context,
-        title: 'Ubicación no verificada',
-        message: 'No se pudo confirmar tu distancia al destino. $e',
-        type: AppSnackBarType.error,
-      );
-    }
-    return false;
+    if (distanceMeters <= 200) return null;
+    return distanceMeters;
+  } catch (_) {
+    return null;
   }
 }

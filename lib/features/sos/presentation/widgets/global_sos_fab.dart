@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -21,53 +20,18 @@ class GlobalSosFab extends ConsumerStatefulWidget {
 }
 
 class _GlobalSosFabState extends ConsumerState<GlobalSosFab> {
-  static const _holdDuration = Duration(seconds: 3);
   static const _buttonSize = 62.0;
   static const _screenMargin = 14.0;
+  static const _dragSlop = 12.0;
   static const _prefX = 'global_sos_fab_x';
   static const _prefY = 'global_sos_fab_y';
 
-  Timer? _holdTimer;
-  bool _holding = false;
-  bool _sending = false;
-  bool _holdTriggered = false;
   Offset? _position;
-  Offset? _dragStartPosition;
+  Offset? _pointerDownGlobal;
+  Offset? _positionAtPointerDown;
   bool _dragging = false;
-
-  @override
-  void dispose() {
-    _holdTimer?.cancel();
-    super.dispose();
-  }
-
-  void _startQuickHold(TapDownDetails details) {
-    if (_sending) return;
-    _holdTimer?.cancel();
-    setState(() {
-      _holding = true;
-      _holdTriggered = false;
-    });
-    _holdTimer = Timer(_holdDuration, () async {
-      if (!mounted || _sending) return;
-      setState(() {
-        _holding = false;
-        _sending = true;
-        _holdTriggered = true;
-      });
-      await _sendQuickAuxilio();
-      if (mounted) {
-        setState(() => _sending = false);
-      }
-    });
-  }
-
-  void _cancelQuickHold() {
-    _holdTimer?.cancel();
-    if (mounted && _holding) {
-      setState(() => _holding = false);
-    }
-  }
+  bool _movedEnough = false;
+  bool _sheetOpen = false;
 
   Future<void> _savePosition(Offset position) async {
     final prefs = await SharedPreferences.getInstance();
@@ -107,36 +71,22 @@ class _GlobalSosFabState extends ConsumerState<GlobalSosFab> {
     );
   }
 
-  Future<void> _sendQuickAuxilio() async {
-    final userId = ref.read(currentUserIdProvider);
-    if (userId == null) return;
-    try {
-      final result = await sendSosWithNotifications(
-        ref,
-        userId: userId,
-        alertLabel: AppStrings.sosPersonalEmergency,
-        alertType: AppStrings.sosTypePersonal,
-      );
-      if (!mounted) return;
-      showAppSnackBar(
-        context,
-        title: 'Auxilio enviado',
-        message: result.notifiedContacts == 0
-            ? 'La alerta quedó guardada, pero ningún contacto tiene la app con ese número.'
-            : 'Se notificó a ${result.notifiedContacts} contacto(s) con tu ubicación.',
-        type: result.notifiedContacts == 0
-            ? AppSnackBarType.warning
-            : AppSnackBarType.success,
-      );
-    } catch (e) {
-      if (!mounted) return;
-      showAppSnackBar(
-        context,
-        title: 'No se pudo enviar auxilio',
-        message: e.toString(),
-        type: AppSnackBarType.error,
-      );
-    }
+  void _openSosOptions() {
+    if (!mounted || _sheetOpen) return;
+    _sheetOpen = true;
+    showModalBottomSheet<void>(
+      context: context,
+      useRootNavigator: true,
+      isScrollControlled: true,
+      showDragHandle: true,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (_) => const _QuickSosSheet(),
+    ).whenComplete(() {
+      _sheetOpen = false;
+    });
   }
 
   @override
@@ -165,109 +115,77 @@ class _GlobalSosFabState extends ConsumerState<GlobalSosFab> {
               Positioned(
                 left: position.dx,
                 top: position.dy,
-                child: Tooltip(
-                  message:
-                      'Arrastra para mover. Mantén 3 segundos para auxilio rápido.',
-                  child: Material(
-                    color: Colors.transparent,
-                    child: GestureDetector(
-                      onPanStart: (_) {
-                        _cancelQuickHold();
-                        _dragStartPosition = _position ?? position;
-                        setState(() => _dragging = true);
-                      },
-                      onPanUpdate: (details) {
-                        final current =
-                            _position ?? _dragStartPosition ?? position;
-                        setState(() {
-                          _position = _clampPosition(
-                            current + details.delta,
-                            size,
-                          );
-                        });
-                      },
-                      onPanEnd: (_) {
-                        final next = _clampPosition(
-                          _position ?? position,
-                          size,
-                        );
-                        setState(() {
-                          _position = next;
-                          _dragging = false;
-                        });
-                        _savePosition(next);
-                      },
-                      onPanCancel: () {
-                        setState(() => _dragging = false);
-                      },
-                      onTapDown: _dragging ? null : _startQuickHold,
-                      onTapUp: (_) => _cancelQuickHold(),
-                      onTapCancel: _cancelQuickHold,
-                      onTap: () {
-                        if (_dragging) return;
-                        if (_holdTriggered) {
-                          _holdTriggered = false;
-                          return;
-                        }
-                        if (!_sending) _showQuickSosSheet(context);
-                      },
-                      child: AnimatedScale(
-                        duration: const Duration(milliseconds: 140),
-                        scale: _dragging ? 1.06 : 1,
-                        child: Container(
-                          width: _buttonSize,
-                          height: _buttonSize,
-                          decoration: BoxDecoration(
-                            color: _sending
-                                ? AppColors.textSecondary
-                                : AppColors.error,
-                            shape: BoxShape.circle,
-                            boxShadow: [
-                              BoxShadow(
-                                color: AppColors.error.withValues(alpha: 0.32),
-                                blurRadius: 20,
-                                offset: const Offset(0, 8),
-                              ),
-                            ],
-                          ),
-                          child: Stack(
-                            alignment: Alignment.center,
-                            children: [
-                              if (_holding)
-                                TweenAnimationBuilder<double>(
-                                  key: UniqueKey(),
-                                  tween: Tween(begin: 0, end: 1),
-                                  duration: _holdDuration,
-                                  builder: (context, value, child) => SizedBox(
-                                    width: _buttonSize,
-                                    height: _buttonSize,
-                                    child: CircularProgressIndicator(
-                                      value: value,
-                                      strokeWidth: 4,
-                                      color: Colors.white,
-                                      backgroundColor: Colors.white.withValues(
-                                        alpha: 0.22,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              if (_sending)
-                                const SizedBox(
-                                  width: 24,
-                                  height: 24,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2.5,
-                                    color: Colors.white,
-                                  ),
-                                )
-                              else
-                                const Icon(
-                                  Icons.sos_outlined,
-                                  color: Colors.white,
-                                  size: 32,
-                                ),
-                            ],
-                          ),
+                width: _buttonSize,
+                height: _buttonSize,
+                child: Listener(
+                  behavior: HitTestBehavior.opaque,
+                  onPointerDown: (event) {
+                    _pointerDownGlobal = event.position;
+                    _positionAtPointerDown = _position ?? position;
+                    _movedEnough = false;
+                    _dragging = false;
+                  },
+                  onPointerMove: (event) {
+                    final down = _pointerDownGlobal;
+                    final origin = _positionAtPointerDown;
+                    if (down == null || origin == null) return;
+
+                    final delta = event.position - down;
+                    if (!_movedEnough && delta.distance < _dragSlop) {
+                      return;
+                    }
+                    _movedEnough = true;
+                    setState(() {
+                      _dragging = true;
+                      _position = _clampPosition(origin + delta, size);
+                    });
+                  },
+                  onPointerUp: (_) {
+                    final wasDrag = _movedEnough;
+                    final next = _clampPosition(
+                      _position ?? position,
+                      size,
+                    );
+                    setState(() {
+                      _position = next;
+                      _dragging = false;
+                    });
+                    _pointerDownGlobal = null;
+                    _positionAtPointerDown = null;
+                    _movedEnough = false;
+
+                    if (wasDrag) {
+                      _savePosition(next);
+                      return;
+                    }
+                    // Pure tap (no meaningful move) → open options.
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted) _openSosOptions();
+                    });
+                  },
+                  onPointerCancel: (_) {
+                    _pointerDownGlobal = null;
+                    _positionAtPointerDown = null;
+                    _movedEnough = false;
+                    if (_dragging) {
+                      setState(() => _dragging = false);
+                    }
+                  },
+                  child: AnimatedScale(
+                    duration: const Duration(milliseconds: 140),
+                    scale: _dragging ? 1.06 : 1,
+                    child: Material(
+                      color: AppColors.error,
+                      shape: const CircleBorder(),
+                      elevation: _dragging ? 10 : 6,
+                      shadowColor: AppColors.error.withValues(alpha: 0.45),
+                      child: const SizedBox(
+                        width: _buttonSize,
+                        height: _buttonSize,
+                        child: Icon(
+                          Icons.sos_outlined,
+                          color: Colors.white,
+                          size: 32,
                         ),
                       ),
                     ),
@@ -278,18 +196,6 @@ class _GlobalSosFabState extends ConsumerState<GlobalSosFab> {
           );
         },
       ),
-    );
-  }
-
-  void _showQuickSosSheet(BuildContext context) {
-    showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      backgroundColor: AppColors.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (_) => const _QuickSosSheet(),
     );
   }
 }
@@ -317,22 +223,25 @@ class _QuickSosSheet extends ConsumerWidget {
           alertType: type,
         );
         if (!context.mounted) return;
-        final messenger = ScaffoldMessenger.of(context);
         Navigator.of(context).pop();
-        messenger.showSnackBar(
-          SnackBar(
-            content: Text(
-              result.notifiedContacts == 0
-                  ? 'SOS guardado. Ningún contacto tiene la app con ese número.'
-                  : 'SOS enviado a ${result.notifiedContacts} contacto(s) en la app',
-            ),
-          ),
+        showAppSnackBar(
+          context,
+          title: 'Auxilio enviado',
+          message: result.notifiedContacts == 0
+              ? 'La alerta quedó guardada, pero ningún contacto tiene la app con ese número.'
+              : 'Se notificó a ${result.notifiedContacts} contacto(s) con tu ubicación.',
+          type: result.notifiedContacts == 0
+              ? AppSnackBarType.warning
+              : AppSnackBarType.success,
         );
       } catch (e) {
         if (!context.mounted) return;
-        ScaffoldMessenger.of(
+        showAppSnackBar(
           context,
-        ).showSnackBar(SnackBar(content: Text('No se pudo enviar SOS: $e')));
+          title: 'No se pudo enviar SOS',
+          message: e.toString(),
+          type: AppSnackBarType.error,
+        );
       }
     }
 
@@ -367,8 +276,8 @@ class _QuickSosSheet extends ConsumerWidget {
                       const SizedBox(height: 2),
                       Text(
                         isDriver
-                            ? 'Elige el tipo de alerta y mantén presionado para enviar.'
-                            : 'Mantén presionado para enviar una alerta de auxilio.',
+                            ? 'Elige el tipo de alerta y tócala para enviar.'
+                            : 'Toca la alerta para enviarla a tus contactos.',
                         style: AppTextStyles.bodySmall.copyWith(
                           color: AppColors.textSecondary,
                         ),
@@ -384,7 +293,7 @@ class _QuickSosSheet extends ConsumerWidget {
               subtitle: 'Notifica a tus contactos con tu ubicación actual.',
               icon: Icons.personal_injury_outlined,
               color: AppColors.error,
-              onConfirmed: () => send(
+              onSend: () => send(
                 label: AppStrings.sosPersonalEmergency,
                 type: AppStrings.sosTypePersonal,
               ),
@@ -396,7 +305,7 @@ class _QuickSosSheet extends ConsumerWidget {
                 subtitle: 'Solicita ayuda por fallas o problemas del vehículo.',
                 icon: Icons.build_circle_outlined,
                 color: AppColors.warning,
-                onConfirmed: () => send(
+                onSend: () => send(
                   label: AppStrings.sosMechanicalProblem,
                   type: AppStrings.sosTypeMechanical,
                 ),
@@ -409,167 +318,104 @@ class _QuickSosSheet extends ConsumerWidget {
   }
 }
 
-class _SosActionTile extends StatelessWidget {
+class _SosActionTile extends StatefulWidget {
   final String title;
   final String subtitle;
   final IconData icon;
   final Color color;
-  final Future<void> Function() onConfirmed;
+  final Future<void> Function() onSend;
 
   const _SosActionTile({
     required this.title,
     required this.subtitle,
     required this.icon,
     required this.color,
-    required this.onConfirmed,
+    required this.onSend,
   });
 
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppColors.background,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: color.withValues(alpha: 0.22)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 46,
-            height: 46,
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: Icon(icon, color: color, size: 26),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: AppTextStyles.labelMedium),
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppTextStyles.bodySmall.copyWith(
-                    color: AppColors.textSecondary,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 10),
-          _HoldSendButton(color: color, onConfirmed: onConfirmed),
-        ],
-      ),
-    );
-  }
+  State<_SosActionTile> createState() => _SosActionTileState();
 }
 
-class _HoldSendButton extends StatefulWidget {
-  final Color color;
-  final Future<void> Function() onConfirmed;
-
-  const _HoldSendButton({required this.color, required this.onConfirmed});
-
-  @override
-  State<_HoldSendButton> createState() => _HoldSendButtonState();
-}
-
-class _HoldSendButtonState extends State<_HoldSendButton> {
-  static const _holdDuration = Duration(seconds: 3);
-
-  Timer? _timer;
-  bool _holding = false;
+class _SosActionTileState extends State<_SosActionTile> {
   bool _sending = false;
 
-  void _startHold(LongPressStartDetails details) {
+  Future<void> _handleTap() async {
     if (_sending) return;
-    setState(() => _holding = true);
-    _timer = Timer(_holdDuration, () async {
-      if (!mounted) return;
-      setState(() {
-        _holding = false;
-        _sending = true;
-      });
-      await widget.onConfirmed();
-      if (mounted) {
-        setState(() => _sending = false);
-      }
-    });
-  }
-
-  void _cancelHold([LongPressEndDetails? details]) {
-    _timer?.cancel();
-    if (mounted && _holding) {
-      setState(() => _holding = false);
+    setState(() => _sending = true);
+    try {
+      await widget.onSend();
+    } finally {
+      if (mounted) setState(() => _sending = false);
     }
   }
 
   @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onLongPressStart: _startHold,
-      onLongPressEnd: _cancelHold,
-      onLongPressCancel: _cancelHold,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        width: 58,
-        height: 42,
-        decoration: BoxDecoration(
-          color: widget.color,
-          borderRadius: BorderRadius.circular(14),
-          boxShadow: [
-            if (_holding)
-              BoxShadow(
-                color: widget.color.withValues(alpha: 0.35),
-                blurRadius: 14,
-                spreadRadius: 1,
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: _sending ? null : _handleTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Ink(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: AppColors.background,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: widget.color.withValues(alpha: 0.22)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 46,
+                height: 46,
+                decoration: BoxDecoration(
+                  color: widget.color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(widget.icon, color: widget.color, size: 26),
               ),
-          ],
-        ),
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            if (_holding)
-              TweenAnimationBuilder<double>(
-                tween: Tween(begin: 0, end: 1),
-                duration: _holdDuration,
-                builder: (context, value, child) => Positioned.fill(
-                  child: FractionallySizedBox(
-                    alignment: Alignment.centerLeft,
-                    widthFactor: value,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.18),
-                        borderRadius: BorderRadius.circular(14),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(widget.title, style: AppTextStyles.labelMedium),
+                    const SizedBox(height: 2),
+                    Text(
+                      widget.subtitle,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTextStyles.bodySmall.copyWith(
+                        color: AppColors.textSecondary,
                       ),
                     ),
-                  ),
+                  ],
                 ),
               ),
-            if (_sending)
-              const SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: Colors.white,
+              const SizedBox(width: 10),
+              Container(
+                width: 58,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: widget.color,
+                  borderRadius: BorderRadius.circular(14),
                 ),
-              )
-            else
-              const Icon(Icons.touch_app_outlined, color: Colors.white),
-          ],
+                child: _sending
+                    ? const Center(
+                        child: SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        ),
+                      )
+                    : const Icon(Icons.send_rounded, color: Colors.white),
+              ),
+            ],
+          ),
         ),
       ),
     );

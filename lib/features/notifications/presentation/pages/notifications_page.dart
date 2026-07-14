@@ -7,9 +7,13 @@ import '../../../../core/constants/app_colors.dart';
 import '../../../../core/constants/app_strings.dart';
 import '../../../../core/constants/app_text_styles.dart';
 import '../../../../core/providers/appwrite_provider.dart';
+import '../../../../core/widgets/app_snackbar.dart';
 import '../../../../core/widgets/app_state_views.dart';
 import '../../../profile/presentation/providers/profile_provider.dart';
+import '../../../ratings/presentation/providers/rating_provider.dart';
+import '../../../ratings/presentation/widgets/rating_dialog.dart';
 import '../../../requests/presentation/providers/request_provider.dart';
+import '../../../trips/presentation/providers/trip_provider.dart';
 import '../../domain/entities/app_notification.dart';
 import '../providers/notification_provider.dart';
 
@@ -137,6 +141,8 @@ class NotificationsPage extends ConsumerWidget {
     return switch (type) {
       'chat' => Icons.chat_bubble_outline,
       'sos' => Icons.sos,
+      'trip_completed' => Icons.flag_outlined,
+      'trip_cancelled' => Icons.cancel_outlined,
       'request_accepted' => Icons.check_circle_outline,
       'request_rejected' => Icons.cancel_outlined,
       'price_proposed' || 'price_accepted' => Icons.payments_outlined,
@@ -147,8 +153,8 @@ class NotificationsPage extends ConsumerWidget {
 
   Color _colorFor(String type) {
     return switch (type) {
-      'sos' || 'request_rejected' => AppColors.error,
-      'request_accepted' => AppColors.success,
+      'sos' || 'request_rejected' || 'trip_cancelled' => AppColors.error,
+      'request_accepted' || 'trip_completed' => AppColors.success,
       _ => AppColors.primary,
     };
   }
@@ -168,7 +174,30 @@ class NotificationsPage extends ConsumerWidget {
       return;
     }
     if (n.type == 'trip_completed') {
-      context.go(AppStrings.routeHome);
+      await _openCompletedTripRating(context, ref, userId, n.relatedId);
+      return;
+    }
+    if (n.type == 'trip_cancelled') {
+      showAppSnackBar(
+        context,
+        title: 'Viaje cancelado',
+        message: 'Busca otro conductor en viajes disponibles.',
+        type: AppSnackBarType.warning,
+      );
+      context.go(AppStrings.routeTrips);
+      return;
+    }
+    if (n.type == 'trip' && n.relatedId != null) {
+      // Fallback when Appwrite rejected trip_completed / trip_cancelled types.
+      final handled = await _openTripStatusNotification(
+        context,
+        ref,
+        userId,
+        n,
+      );
+      if (!context.mounted) return;
+      if (handled) return;
+      context.push('${AppStrings.routeTrips}/${n.relatedId}');
       return;
     }
     if (n.type == 'sos') {
@@ -185,8 +214,113 @@ class NotificationsPage extends ConsumerWidget {
       context.push('${AppStrings.routeTrips}/${n.relatedId}');
       return;
     }
-    if (n.type == 'trip' && n.relatedId != null) {
-      context.push('${AppStrings.routeTrips}/${n.relatedId}');
+  }
+
+  Future<bool> _openTripStatusNotification(
+    BuildContext context,
+    WidgetRef ref,
+    String userId,
+    AppNotification n,
+  ) async {
+    final tripId = n.relatedId;
+    if (tripId == null) return false;
+    final title = n.title.toLowerCase();
+    final body = n.body.toLowerCase();
+    final looksCancelled =
+        title.contains('cancel') || body.contains('cancel');
+    final looksFinished =
+        title.contains('finaliz') || body.contains('califica');
+
+    try {
+      final trip = await ref.read(tripByIdProvider(tripId).future);
+      if (!context.mounted) return true;
+
+      if (trip.status == AppStrings.statusCancelled || looksCancelled) {
+        showAppSnackBar(
+          context,
+          title: 'Viaje cancelado',
+          message: 'Busca otro conductor. No se puede calificar este viaje.',
+          type: AppSnackBarType.warning,
+        );
+        context.go(AppStrings.routeTrips);
+        return true;
+      }
+
+      if (trip.status == AppStrings.statusCompleted || looksFinished) {
+        await _openCompletedTripRating(context, ref, userId, tripId);
+        return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  Future<void> _openCompletedTripRating(
+    BuildContext context,
+    WidgetRef ref,
+    String userId,
+    String? tripId,
+  ) async {
+    if (tripId == null) {
+      context.go(AppStrings.routeHome);
+      return;
+    }
+
+    try {
+      final trip = await ref.read(tripByIdProvider(tripId).future);
+      if (!context.mounted) return;
+
+      if (trip.status == AppStrings.statusCancelled) {
+        showAppSnackBar(
+          context,
+          title: 'Viaje cancelado',
+          message: 'Este viaje se canceló. No se puede calificar al conductor.',
+          type: AppSnackBarType.warning,
+        );
+        context.go(AppStrings.routeTrips);
+        return;
+      }
+
+      if (trip.status != AppStrings.statusCompleted) {
+        context.push('${AppStrings.routeTrips}/$tripId');
+        return;
+      }
+
+      final result = await RatingDialog.show(context);
+      if (result == null || !context.mounted) return;
+
+      await ref
+          .read(ratingNotifierProvider.notifier)
+          .sendRating(
+            tripId: tripId,
+            raterId: userId,
+            ratedUserId: trip.driverId,
+            score: result.score,
+            comment: result.comment,
+          );
+
+      ref.invalidate(pendingDriverRatingsProvider(userId));
+      ref.invalidate(ratingsForUserProvider(trip.driverId));
+      if (!context.mounted) return;
+
+      final state = ref.read(ratingNotifierProvider);
+      showAppSnackBar(
+        context,
+        title: state.hasError ? 'No se envió la calificación' : 'Gracias',
+        message: state.hasError
+            ? state.error.toString()
+            : 'Calificación enviada al conductor.',
+        type: state.hasError ? AppSnackBarType.error : AppSnackBarType.success,
+      );
+      if (!state.hasError) context.go(AppStrings.routeHome);
+    } catch (e) {
+      if (!context.mounted) return;
+      showAppSnackBar(
+        context,
+        title: 'No se pudo abrir la calificación',
+        message: e.toString(),
+        type: AppSnackBarType.error,
+      );
+      context.go(AppStrings.routeHome);
     }
   }
 

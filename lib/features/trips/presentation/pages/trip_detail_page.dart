@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../../../core/constants/app_colors.dart';
+import '../../../../core/constants/map_tiles.dart';
 import '../../../../core/constants/app_text_styles.dart';
 import '../../../../core/constants/app_strings.dart';
 import '../../../../core/providers/appwrite_provider.dart';
@@ -455,32 +456,55 @@ class _TripDetailPageState extends ConsumerState<TripDetailPage> {
                           width: double.infinity,
                           height: 50,
                           child: ElevatedButton(
-                            onPressed: () {
-                              showDialog(
-                                context: context,
-                                builder: (ctx) => AlertDialog(
-                                  title: const Text('Cancelar viaje'),
-                                  content: const Text(
-                                    '¿Estás seguro de cancelar este viaje?',
-                                  ),
-                                  actions: [
-                                    TextButton(
-                                      onPressed: () => Navigator.pop(ctx),
-                                      child: const Text('No'),
-                                    ),
-                                    TextButton(
-                                      onPressed: () {
-                                        Navigator.pop(ctx);
-                                        ref
-                                            .read(tripNotifierProvider.notifier)
-                                            .deleteTrip(tripId, userId!);
-                                      },
-                                      child: const Text('Sí, cancelar'),
-                                    ),
-                                  ],
-                                ),
-                              );
-                            },
+                            onPressed: userId == null
+                                ? null
+                                : () async {
+                                    final confirmed = await showDialog<bool>(
+                                      context: context,
+                                      builder: (ctx) => AlertDialog(
+                                        title: const Text('Cancelar viaje'),
+                                        content: const Text(
+                                          '¿Estás seguro de cancelar este viaje?',
+                                        ),
+                                        actions: [
+                                          TextButton(
+                                            onPressed: () =>
+                                                Navigator.pop(ctx, false),
+                                            child: const Text('No'),
+                                          ),
+                                          TextButton(
+                                            onPressed: () =>
+                                                Navigator.pop(ctx, true),
+                                            child: const Text('Sí, cancelar'),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                    if (confirmed != true) return;
+                                    final ok = await cancelTripWithCleanup(
+                                      ref,
+                                      trip: trip,
+                                      driverId: userId,
+                                    );
+                                    if (!context.mounted) return;
+                                    showAppSnackBar(
+                                      context,
+                                      title: ok
+                                          ? 'Viaje cancelado'
+                                          : 'No se canceló el viaje',
+                                      message: ok
+                                          ? 'Se avisó a los pasajeros para que busquen otro viaje.'
+                                          : (ref
+                                                    .read(tripNotifierProvider)
+                                                    .error
+                                                    ?.toString() ??
+                                                'No se pudo cancelar.'),
+                                      type: ok
+                                          ? AppSnackBarType.info
+                                          : AppSnackBarType.error,
+                                    );
+                                    if (ok) context.go(AppStrings.routeMyTrips);
+                                  },
                             style: ElevatedButton.styleFrom(
                               backgroundColor: AppColors.error,
                               foregroundColor: Colors.white,
@@ -581,22 +605,52 @@ Future<void> _completeTrip(
   Trip trip,
   String userId,
 ) async {
-  final position = await Geolocator.getCurrentPosition();
-  final nearDestination = _isNearDestination(
-    trip,
-    LatLng(position.latitude, position.longitude),
-  );
-  if (!nearDestination) {
-    if (!context.mounted) return;
-    showAppSnackBar(
-      context,
-      title: 'Aún no llegas al destino',
-      message:
-          'Debes estar cerca del destino para marcar el viaje como completado.',
-      type: AppSnackBarType.warning,
-    );
-    return;
+  double? distanceHint;
+  try {
+    final position = await Geolocator.getCurrentPosition();
+    final destinationLatitude = trip.destinationLatitude;
+    final destinationLongitude = trip.destinationLongitude;
+    if (destinationLatitude != null && destinationLongitude != null) {
+      final meters = Geolocator.distanceBetween(
+        position.latitude,
+        position.longitude,
+        destinationLatitude,
+        destinationLongitude,
+      );
+      if (meters > 200) distanceHint = meters;
+    }
+  } catch (_) {
+    // Si no hay GPS, igual permitimos finalizar con confirmación.
   }
+
+  if (!context.mounted) return;
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('Finalizar viaje'),
+      content: Text(
+        distanceHint == null
+            ? '¿Estás seguro de finalizar el viaje?\n\n'
+                  'Se marcará como completado y se cerrará el chat con los pasajeros.'
+            : '¿Estás seguro de finalizar el viaje?\n\n'
+                  'Estás a unos ${distanceHint.round()} m del destino. '
+                  'Aun así puedes finalizarlo si ya terminaste el recorrido.\n\n'
+                  'Se marcará como completado y se cerrará el chat con los pasajeros.',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(dialogContext, false),
+          child: const Text(AppStrings.cancel),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(dialogContext, true),
+          child: const Text('Sí, finalizar'),
+        ),
+      ],
+    ),
+  );
+
+  if (confirmed != true) return;
 
   final ok = await completeTripWithCleanup(ref, trip: trip, driverId: userId);
   if (!context.mounted) return;
@@ -617,19 +671,6 @@ Future<void> _completeTrip(
     type: AppSnackBarType.success,
   );
   context.push('${AppStrings.routeTrips}/${trip.id}/report');
-}
-
-bool _isNearDestination(Trip trip, LatLng current) {
-  final destinationLatitude = trip.destinationLatitude;
-  final destinationLongitude = trip.destinationLongitude;
-  if (destinationLatitude == null || destinationLongitude == null) return false;
-  final meters = Geolocator.distanceBetween(
-    current.latitude,
-    current.longitude,
-    destinationLatitude,
-    destinationLongitude,
-  );
-  return meters <= 200;
 }
 
 class _PassengerRequestBanner extends ConsumerWidget {
@@ -962,9 +1003,9 @@ class _TripRouteMap extends ConsumerWidget {
                 ),
                 children: [
                   TileLayer(
-                    urlTemplate:
-                        'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                    userAgentPackageName: 'com.nexuscampus.app',
+                    urlTemplate: MapTiles.urlTemplate,
+                    subdomains: MapTiles.subdomains,
+                    userAgentPackageName: MapTiles.userAgentPackageName,
                   ),
                   PolylineLayer(
                     polylines: [

@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../../../core/constants/app_colors.dart';
+import '../../../../core/constants/map_tiles.dart';
 import '../../../../core/constants/app_text_styles.dart';
 import '../../../../core/providers/appwrite_provider.dart';
 import '../../../../core/utils/geo_fare.dart';
@@ -556,8 +557,6 @@ class _StopsMapCard extends StatelessWidget {
     required this.onMapTap,
   });
 
-  static const _epnLocation = LatLng(-0.2106, -78.4889);
-
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -577,14 +576,21 @@ class _StopsMapCard extends StatelessWidget {
               height: 320,
               child: locationAsync.when(
                 loading: () => const Center(child: CircularProgressIndicator()),
-                error: (_, _) => _MapView(
-                  center: tripOrigin ?? _epnLocation,
-                  routeInfo: routeInfo,
-                  tripOrigin: tripOrigin,
-                  tripDestination: tripDestination,
-                  stops: stops,
-                  onMapTap: onMapTap,
-                ),
+                error: (_, _) => tripOrigin == null
+                    ? const Center(
+                        child: Text(
+                          'Activa la ubicación para marcar tu parada.',
+                          textAlign: TextAlign.center,
+                        ),
+                      )
+                    : _MapView(
+                        center: tripOrigin!,
+                        routeInfo: routeInfo,
+                        tripOrigin: tripOrigin,
+                        tripDestination: tripDestination,
+                        stops: stops,
+                        onMapTap: onMapTap,
+                      ),
                 data: (location) => _MapView(
                   center:
                       (stops.isNotEmpty
@@ -643,8 +649,9 @@ class _MapView extends StatelessWidget {
       ),
       children: [
         TileLayer(
-          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-          userAgentPackageName: 'com.nexuscampus.app',
+          urlTemplate: MapTiles.urlTemplate,
+                    subdomains: MapTiles.subdomains,
+                    userAgentPackageName: MapTiles.userAgentPackageName,
         ),
         if (routeInfo != null && routeInfo!.points.isNotEmpty)
           PolylineLayer(

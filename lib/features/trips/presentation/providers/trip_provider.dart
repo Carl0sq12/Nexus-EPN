@@ -40,6 +40,22 @@ final tripByIdProvider = FutureProvider.family<Trip, String>((ref, tripId) {
   return ref.watch(tripRepositoryProvider).getTripById(tripId);
 });
 
+/// Live trip status (polling) so passengers detect cancel/complete promptly.
+final tripStatusStreamProvider = StreamProvider.family<Trip, String>((
+  ref,
+  tripId,
+) async* {
+  final repository = ref.watch(tripRepositoryProvider);
+  while (true) {
+    try {
+      yield await repository.getTripById(tripId);
+    } catch (_) {
+      // Keep last emission on transient errors.
+    }
+    await Future<void>.delayed(const Duration(seconds: 3));
+  }
+});
+
 /// State notifier that manages trip create/update/delete actions.
 class TripNotifier extends StateNotifier<AsyncValue<void>> {
   final Ref ref;

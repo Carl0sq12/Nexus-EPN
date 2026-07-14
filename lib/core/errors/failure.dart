@@ -9,6 +9,9 @@ abstract class Failure extends Equatable {
 
   @override
   List<Object?> get props => [message];
+
+  @override
+  String toString() => message.isEmpty ? runtimeType.toString() : message;
 }
 
 /// Representa errores del servidor (500, respuestas inválidas, etc.).

@@ -195,7 +195,15 @@ class _PassengerTripsList extends ConsumerWidget {
               );
             }
 
-            return ListView.separated(
+            return RefreshIndicator(
+              onRefresh: () async {
+                ref.invalidate(availableTripsProvider);
+                if (userId != null) {
+                  ref.invalidate(myRequestsProvider(userId));
+                }
+              },
+              child: ListView.separated(
+              physics: const AlwaysScrollableScrollPhysics(),
               padding: const EdgeInsets.all(16),
               itemCount: trips.length + (requestsAsync == null ? 0 : 1),
               separatorBuilder: (_, _) => const SizedBox(height: 16),
@@ -219,7 +227,12 @@ class _PassengerTripsList extends ConsumerWidget {
                   orElse: () => 'Conductor',
                 );
 
-                return Card(
+                return Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(20),
+                    onTap: () => context.push('/trips/${trip.id}'),
+                    child: Card(
                   elevation: 0,
                   color: Colors.white,
                   shape: RoundedRectangleBorder(
@@ -494,8 +507,11 @@ class _PassengerTripsList extends ConsumerWidget {
                       ],
                     ),
                   ),
+                ),
+                  ),
                 );
               },
+            ),
             );
           },
         );
@@ -600,6 +616,12 @@ class _AcceptedPassengerTripShortcut extends ConsumerWidget {
       loading: () => const _AcceptedTripLoadingCard(),
       error: (_, _) => _AcceptedTripFallbackCard(request: request),
       data: (trip) {
+        // Completed/cancelled trips belong in history, not as active shortcut.
+        if (trip.status == AppStrings.statusCompleted ||
+            trip.status == AppStrings.statusCancelled) {
+          return const SizedBox.shrink();
+        }
+
         final driver = ref.watch(profileProvider(trip.driverId)).asData?.value;
         final driverName = driver?.fullName.trim().isNotEmpty == true
             ? driver!.fullName.trim()

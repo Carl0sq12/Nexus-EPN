@@ -19,9 +19,9 @@ class AuthRemoteDatasource {
   final Databases _databases;
 
   static const String _confirmSignUpRedirect =
-      'https://nexus-five-chi.vercel.app/auth-callback.html';
+      'https://nexus-campus-auth.vercel.app/auth-callback.html';
   static const String _resetPasswordRedirect =
-      'https://nexus-five-chi.vercel.app/reset-password.html';
+      'https://nexus-campus-auth.vercel.app/reset-password.html';
 
   static const String _networkErrorMessage =
       'Sin conexión a internet. Revisa Wi‑Fi o datos móviles e inténtalo de nuevo.';
@@ -167,7 +167,7 @@ class AuthRemoteDatasource {
         text.contains('invalid `url`') ||
         text.contains('invalid url')) {
       return 'Appwrite rechazó la URL de verificación. En Console → Platforms '
-          'agrega Web: nexus-five-chi.vercel.app y en Auth → Settings las '
+          'agrega Web: nexus-campus-auth.vercel.app y en Auth → Settings las '
           'Redirect URLs del proyecto.';
     }
     if (e is AppwriteException) {

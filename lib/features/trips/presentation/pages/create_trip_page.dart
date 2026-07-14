@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../../../core/constants/app_colors.dart';
+import '../../../../core/constants/map_tiles.dart';
 import '../../../../core/constants/app_limits.dart';
 import '../../../../core/constants/app_text_styles.dart';
 
@@ -365,7 +366,24 @@ class _CreateTripPageState extends ConsumerState<CreateTripPage> {
       _updateFare();
     } catch (e) {
       if (!mounted) return;
-      setState(() => _routeError = e.toString());
+      // Fallback on slow/blocked mobile data: straight line so publishing
+      // still works when OSRM is unreachable.
+      final distance = const Distance().as(
+        LengthUnit.Meter,
+        origin,
+        destination,
+      );
+      final fallback = RouteInfo(
+        points: [origin, destination],
+        distanceMeters: distance,
+        durationSeconds: distance / 8.3, // ~30 km/h urban estimate
+      );
+      setState(() {
+        _routeInfo = fallback;
+        _routeError =
+            'Ruta aproximada (sin servicio de navegación). Puedes publicar igual.';
+      });
+      _updateFare();
     } finally {
       if (mounted) {
         setState(() => _isLoadingRoute = false);
@@ -775,9 +793,9 @@ class _RoutePickerCard extends StatelessWidget {
                     ),
                     children: [
                       TileLayer(
-                        urlTemplate:
-                            'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                        userAgentPackageName: 'com.nexuscampus.app',
+                        urlTemplate: MapTiles.urlTemplate,
+                    subdomains: MapTiles.subdomains,
+                    userAgentPackageName: MapTiles.userAgentPackageName,
                       ),
                       if (routeInfo != null && routeInfo!.points.isNotEmpty)
                         PolylineLayer(
