@@ -18,6 +18,8 @@ Future<SosSendResult> sendSosWithNotifications(
   required String alertLabel,
   required String alertType,
 }) async {
+  // Always take a fresh GPS fix for SOS — never a cached home-map pin.
+  ref.invalidate(currentLocationProvider);
   final location = await ref.read(currentLocationProvider.future);
 
   await ref

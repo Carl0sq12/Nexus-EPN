@@ -140,8 +140,9 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
     _animatedMapController.animateTo(
       dest: point,
       zoom: zoom ?? _animatedMapController.mapController.camera.zoom,
-      // flutter_map rotation is clockwise; course-up needs the inverse.
-      rotation: heading == null ? null : -heading,
+      // flutter_map rotation is clockwise from north. Course-up keeps travel
+      // at the top of the screen (sign matched to the navigation arrow).
+      rotation: heading,
     );
   }
 
@@ -173,7 +174,7 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
           stop.latitude,
           stop.longitude,
         );
-        if (distance <= 60) {
+        if (distance <= 80) {
           _notifiedStopKeys.add(key);
           try {
             await ds.create(
@@ -228,7 +229,7 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
       }
     }
 
-    if (distanceToDestination <= 150) {
+    if (distanceToDestination <= 180) {
       if (!_notifiedArrivedDestination) {
         _notifiedArrivedDestination = true;
         _showTripLiveBanner(
@@ -264,7 +265,7 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
 
       if (!_approachingStopBannerKeys.contains(key) &&
           distance <= 250 &&
-          distance > 60) {
+          distance > 80) {
         _approachingStopBannerKeys.add(key);
         _showTripLiveBanner(
           title: 'Ya casi llegas',
@@ -292,7 +293,7 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
       );
     }
 
-    if (!_notifiedArrivedDestination && distanceToDestination <= 150) {
+    if (!_notifiedArrivedDestination && distanceToDestination <= 180) {
       _notifiedArrivedDestination = true;
       _showTripLiveBanner(
         title: 'Llegaron al destino',
@@ -376,7 +377,7 @@ class _TripNavigationPageState extends ConsumerState<TripNavigationPage>
         stop.latitude,
         stop.longitude,
       );
-      if (distance > 60) continue;
+      if (distance > 80) continue;
 
       _passengerStopCompletedKeys.add(key);
       _passengerStopRated = true;
@@ -1225,7 +1226,9 @@ class _SmoothDriverMarkerState extends State<_SmoothDriverMarker>
         final t = Curves.easeOutCubic.transform(_controller.value);
         final heading = _lerpAngle(_fromHeading, _toHeading, t);
         // Course-up: map already faces travel direction — keep arrow pointing up.
-        // North-up (manual pan): rotate arrow by geographic heading.
+        // North-up: rotate arrow by geographic heading.
+        // Icons.navigation tip is drawn "up"; no extra flip needed once map
+        // rotation sign matches travel bearing.
         final screenDegrees = widget.courseUp ? 0.0 : heading;
         return Transform.rotate(
           angle: screenDegrees * math.pi / 180,

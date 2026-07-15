@@ -756,7 +756,11 @@ class _MapSectionState extends State<_MapSection> {
     }
     final point = LatLng(location.latitude, location.longitude);
     _lastCentered = point;
-    _mapController.move(point, 16);
+    try {
+      _mapController.move(point, 16);
+    } catch (_) {
+      // Map may not be ready yet.
+    }
   }
 
   @override
@@ -765,11 +769,16 @@ class _MapSectionState extends State<_MapSection> {
     final location = widget.locationAsync.asData?.value;
     if (location == null) return;
     final point = LatLng(location.latitude, location.longitude);
-    if (_lastCentered != null &&
-        (_lastCentered!.latitude - point.latitude).abs() < 0.00001 &&
-        (_lastCentered!.longitude - point.longitude).abs() < 0.00001) {
-      return;
-    }
+    final movedFar =
+        _lastCentered == null ||
+        Geolocator.distanceBetween(
+              _lastCentered!.latitude,
+              _lastCentered!.longitude,
+              point.latitude,
+              point.longitude,
+            ) >
+            8;
+    if (!movedFar) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       try {
@@ -807,7 +816,14 @@ class _MapSectionState extends State<_MapSection> {
                   child: Text('Mapa cercano', style: AppTextStyles.titleMedium),
                 ),
                 InkWell(
-                  onTap: widget.onRetryLocation,
+                  onTap: () {
+                    widget.onRetryLocation();
+                    // Re-center once the refreshed stream emits.
+                    Future<void>.delayed(const Duration(milliseconds: 600), () {
+                      if (!mounted) return;
+                      _centerOnMe();
+                    });
+                  },
                   child: Text(
                     'Ubicación actual',
                     style: AppTextStyles.bodySmall.copyWith(

@@ -35,39 +35,22 @@ final currentLocationProvider = FutureProvider<UserLocation>((ref) {
   return useCase(const NoParams());
 });
 
-/// Streams the device location while an in-app trip is in progress.
+/// Streams the device location for home map, navigation and related UI.
 ///
-/// Yields last-known immediately (when available), then a fresh fix, then the
-/// continuous GPS stream — so the UI never sticks on EPN fallbacks while
-/// waiting for the first lock.
+/// Asks for a fresh high-accuracy fix first (no stale lastKnown pin), then
+/// continues with the live GPS stream — same flow that worked in the morning.
 final currentLocationStreamProvider = StreamProvider<UserLocation>((
   ref,
 ) async* {
   final datasource = ref.watch(locationDatasourceProvider);
 
-  final lastKnown = await datasource.getLastKnownPosition();
-  if (lastKnown != null) {
-    yield UserLocation(
-      latitude: lastKnown.latitude,
-      longitude: lastKnown.longitude,
-      heading: lastKnown.heading,
-      speed: lastKnown.speed,
-    );
-  }
-
-  try {
-    final fresh = await datasource.getCurrentPosition();
-    yield UserLocation(
-      latitude: fresh.latitude,
-      longitude: fresh.longitude,
-      heading: fresh.heading,
-      speed: fresh.speed,
-    );
-  } catch (_) {
-    // Keep streaming if lastKnown already painted the map; otherwise rethrow
-    // so the UI can show a real error (not a fake campus pin).
-    if (lastKnown == null) rethrow;
-  }
+  final initialPosition = await datasource.getCurrentPosition();
+  yield UserLocation(
+    latitude: initialPosition.latitude,
+    longitude: initialPosition.longitude,
+    heading: initialPosition.heading,
+    speed: initialPosition.speed,
+  );
 
   yield* datasource.watchPosition().map(
     (position) => UserLocation(

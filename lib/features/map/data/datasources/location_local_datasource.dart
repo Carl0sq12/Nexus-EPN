@@ -4,10 +4,7 @@ import 'dart:io';
 import 'package:geolocator/geolocator.dart';
 import '../../../../core/errors/exceptions.dart';
 
-/// Local datasource for device location using Geolocator.
-///
-/// Requires Android: `<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />`
-/// Requires iOS: `NSLocationWhenInUseUsageDescription` in Info.plist.
+/// Local datasource for device location using Geolocator (Fused / high accuracy).
 class LocationLocalDatasource {
   const LocationLocalDatasource();
 
@@ -32,103 +29,80 @@ class LocationLocalDatasource {
     }
   }
 
-  /// Fast path for UI: last cached GPS fix, if any.
-  Future<Position?> getLastKnownPosition() async {
-    try {
-      await ensurePermission();
-      return await Geolocator.getLastKnownPosition();
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// Fresh GPS fix with timeout and Android LocationManager fallback.
-  ///
-  /// Some devices (e.g. Infinix) hang or fail with Fused Location; we retry
-  /// with the platform LocationManager when needed.
+  /// Fresh GPS fix. Retries until accuracy is usable (home map + SOS).
   Future<Position> getCurrentPosition() async {
     try {
       await ensurePermission();
 
-      final lastKnown = await Geolocator.getLastKnownPosition();
-
-      try {
-        return await _readCurrentPosition(forceLocationManager: false);
-      } catch (_) {
-        if (Platform.isAndroid) {
-          try {
-            return await _readCurrentPosition(forceLocationManager: true);
-          } catch (_) {
-            if (lastKnown != null) return lastKnown;
-            rethrow;
-          }
+      Position? best;
+      for (var attempt = 0; attempt < 3; attempt++) {
+        final position = await Geolocator.getCurrentPosition(
+          locationSettings: _oneShotSettings(),
+        );
+        if (best == null || position.accuracy < best.accuracy) {
+          best = position;
         }
-        if (lastKnown != null) return lastKnown;
-        rethrow;
+        // Good enough for map/SOS.
+        if (position.accuracy > 0 && position.accuracy <= 50) {
+          return position;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 700));
       }
+      return best!;
     } catch (e) {
       if (e is ServerException) rethrow;
       throw ServerException(e.toString());
     }
   }
 
-  Future<Position> _readCurrentPosition({
-    required bool forceLocationManager,
-  }) {
-    final LocationSettings settings;
+  /// Continuous GPS updates for home map and trip navigation.
+  Stream<Position> watchPosition() async* {
+    await ensurePermission();
+    yield* Geolocator.getPositionStream(locationSettings: _streamSettings());
+  }
+
+  LocationSettings _oneShotSettings() {
     if (Platform.isAndroid) {
-      settings = AndroidSettings(
+      return AndroidSettings(
         accuracy: LocationAccuracy.best,
         distanceFilter: 0,
-        forceLocationManager: forceLocationManager,
-        timeLimit: const Duration(seconds: 15),
+        timeLimit: const Duration(seconds: 20),
       );
-    } else if (Platform.isIOS || Platform.isMacOS) {
-      settings = AppleSettings(
+    }
+    if (Platform.isIOS || Platform.isMacOS) {
+      return AppleSettings(
         accuracy: LocationAccuracy.best,
         activityType: ActivityType.otherNavigation,
         distanceFilter: 0,
-        timeLimit: const Duration(seconds: 15),
-      );
-    } else {
-      settings = const LocationSettings(
-        accuracy: LocationAccuracy.best,
-        distanceFilter: 0,
-        timeLimit: Duration(seconds: 15),
+        timeLimit: const Duration(seconds: 20),
       );
     }
-
-    return Geolocator.getCurrentPosition(locationSettings: settings);
+    return const LocationSettings(
+      accuracy: LocationAccuracy.best,
+      distanceFilter: 0,
+      timeLimit: Duration(seconds: 20),
+    );
   }
 
-  /// Live navigation stream after permission is granted.
-  Stream<Position> watchPosition() async* {
-    await ensurePermission();
-
-    final LocationSettings settings;
+  LocationSettings _streamSettings() {
     if (Platform.isAndroid) {
-      settings = AndroidSettings(
+      return AndroidSettings(
         accuracy: LocationAccuracy.bestForNavigation,
         distanceFilter: 1,
-        intervalDuration: const Duration(milliseconds: 800),
-        // Prefer Android LocationManager on devices where Fused Location
-        // reports stale campus / wrong fixes.
-        forceLocationManager: true,
+        intervalDuration: const Duration(milliseconds: 700),
       );
-    } else if (Platform.isIOS || Platform.isMacOS) {
-      settings = AppleSettings(
+    }
+    if (Platform.isIOS || Platform.isMacOS) {
+      return AppleSettings(
         accuracy: LocationAccuracy.bestForNavigation,
         activityType: ActivityType.automotiveNavigation,
         distanceFilter: 1,
         pauseLocationUpdatesAutomatically: false,
       );
-    } else {
-      settings = const LocationSettings(
-        accuracy: LocationAccuracy.bestForNavigation,
-        distanceFilter: 1,
-      );
     }
-
-    yield* Geolocator.getPositionStream(locationSettings: settings);
+    return const LocationSettings(
+      accuracy: LocationAccuracy.bestForNavigation,
+      distanceFilter: 1,
+    );
   }
 }
